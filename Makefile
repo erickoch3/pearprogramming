@@ -1,4 +1,4 @@
-.PHONY: install api clean help
+.PHONY: install api mockapi ui mockui clean help
 
 # Virtual environment directory
 VENV := .venv
@@ -12,6 +12,9 @@ help:
 	@echo "Available targets:"
 	@echo "  make install    - Create virtual environment and install dependencies"
 	@echo "  make api        - Start the FastAPI backend service"
+	@echo "  make mockapi    - Start the FastAPI backend with mock data (MOCK=1)"
+	@echo "  make ui         - Start the Next.js UI development server"
+	@echo "  make mockui     - Start the Next.js UI with mock data (NEXT_PUBLIC_MOCK=1)"
 	@echo "  make clean      - Remove virtual environment"
 
 install:
@@ -33,6 +36,22 @@ api:
 	fi
 	@echo "Starting FastAPI server..."
 	@$(PYTHON) -m uvicorn api.app.main:app --reload --host 0.0.0.0 --port 8000
+
+mockapi:
+	@if [ ! -d $(VENV) ]; then \
+		echo "Virtual environment not found. Running 'make install'..."; \
+		$(MAKE) install; \
+	fi
+	@echo "Starting FastAPI server with mock data..."
+	@MOCK=1 $(PYTHON) -m uvicorn api.app.main:app --reload --host 0.0.0.0 --port 8000
+
+ui:
+	@echo "Starting Next.js UI development server..."
+	@cd ui && yarn run dev
+
+mockui:
+	@echo "Starting Next.js UI with mock data..."
+	@cd ui && NEXT_PUBLIC_MOCK=1 yarn run dev
 
 clean:
 	@echo "Removing virtual environment..."

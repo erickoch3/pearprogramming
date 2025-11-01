@@ -12,7 +12,7 @@ class Event(BaseModel):
     location: Location = Field(..., description="Cartesian location coordinates")
     name: str = Field(..., description="Human-readable name for the event")
     emoji: str = Field(..., description="Emoji summarizing the event vibe")
-    event_score: int = Field(
+    event_score: float = Field(
         ...,
         ge=0,
         le=10,
@@ -45,4 +45,3 @@ class GetEventRecommendationsResponse(BaseModel):
     """Response payload containing recommended events."""
 
     events: list[Event] = Field(default_factory=list, description="Recommended events")
-
