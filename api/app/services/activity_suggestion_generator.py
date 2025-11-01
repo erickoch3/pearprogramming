@@ -4,6 +4,7 @@ from typing import List
 
 from ..models import Event
 from .context_aggregator import ContextAggregator
+from .llm import LLM
 
 
 class ActivitySuggestionGenerator:
@@ -24,39 +25,7 @@ class ActivitySuggestionGenerator:
 
     def _get_ranked_events(self, preferences: str) -> List[Event]:
         """Return a preference-aware ordered list of candidate events."""
-        # Placeholder scoring showcasing structure; replace with ML or rules later.
-        sample_events: List[Event] = [
-            Event(
-                location=(12, 34),
-                name="Community Coding Jam",
-                emoji="💻",
-                event_score=9,
-                description="Pair up with local devs for a collaborative hack session.",
-                link="https://example.com/community-coding-jam",
-            ),
-            Event(
-                location=(5, 18),
-                name="Art Walk Downtown",
-                emoji="🎨",
-                event_score=7,
-                description="Explore pop-up galleries with live demos from local artists.",
-            ),
-            Event(
-                location=(22, 9),
-                name="Gourmet Food Truck Rally",
-                emoji="🌮",
-                event_score=8,
-                description="Taste bites from featured chefs with live music.",
-            ),
-            Event(
-                location=(3, 42),
-                name="Outdoor Movie Night",
-                emoji="🎬",
-                event_score=6,
-                description="Bring a blanket for a classic film under the stars.",
-                link="https://example.com/outdoor-movie-night",
-            ),
-        ]
+        sample_events = LLM()._get_fallback_events()
 
         if not preferences:
             return sample_events
