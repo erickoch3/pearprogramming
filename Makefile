@@ -1,4 +1,4 @@
-.PHONY: install api mockapi ui mockui clean help test democontext
+.PHONY: install api mockapi ui mockui clean help test democontext demoevents
 
 # Virtual environment directory
 VENV := .venv
@@ -79,6 +79,17 @@ democontext:
 	[ -f .env ] && . .env; \
 	set +a; \
 	$(PYTHON) -c 'import json, os; from api.app.services.context_aggregator import ContextAggregator; preferences = os.getenv("PREFERENCES"); context = ContextAggregator().gather_context(preferences); print(json.dumps(context, indent=2, default=str))'
+
+demoevents:
+	@if [ ! -d $(VENV) ]; then \
+		echo "Virtual environment not found. Running 'make install'..."; \
+		$(MAKE) install; \
+	fi
+	@echo "Requesting demo event recommendations..."
+	@set -a; \
+	[ -f .env ] && . .env; \
+	set +a; \
+	$(PYTHON) scripts/demo_events.py
 
 clean:
 	@echo "Removing virtual environment..."
