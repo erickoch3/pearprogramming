@@ -4,7 +4,7 @@ import logging
 import os
 from collections.abc import Mapping
 from datetime import date
-from typing import Any
+from typing import Any, Optional
 
 import requests
 from dotenv import load_dotenv
@@ -130,20 +130,20 @@ class ContextAggregator:
 
     def gather_context(
         self,
-        response_preferences: str | None,
+        response_preferences: Optional[str],
         *,
-        target_date: date | None = None,
+        target_date: Optional[date] = None,
         default_city: str = "Edinburgh",
         default_country_code: str = "GB",
-        festival: str | None = None,
-        festival_limit: int | None = 25,
+        festival: Optional[str] = None,
+        festival_limit: Optional[int] = 25,
     ) -> Mapping[str, Any]:
         """Aggregate request preferences, weather, and festival events."""
         normalized_preferences = (response_preferences or "").strip().lower()
         resolved_date = target_date or date.today()
 
-        weather_payload: Mapping[str, Any] | None
-        weather_error: str | None = None
+        weather_payload: Optional[Mapping[str, Any]]
+        weather_error: Optional[str] = None
         try:
             weather_payload = self.get_todays_weather_forecast(
                 default_city, default_country_code, resolved_date

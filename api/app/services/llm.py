@@ -1,7 +1,7 @@
 import os
 from typing import Any, List, Mapping
 from langchain.agents import create_agent
-from ..models import EventList, Event
+from ..schemas.events import EventList, Event
 from dotenv import load_dotenv
 
 
@@ -21,7 +21,7 @@ class LLM:
     def generate_event_suggestions(
         self, 
         context: Any, 
-    ) -> list[Event]:
+    ) -> List[Event]:
         """
         Generate event suggestions using ChatGPT via OpenRouter.
         
