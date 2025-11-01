@@ -1,45 +1,136 @@
-import os
-from typing import Any, List, Mapping
-from langchain.agents import create_agent
-from ..schemas.events import EventList, Event
-from dotenv import load_dotenv
+from __future__ import annotations
 
+import json
+import logging
+import os
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any, List
+
+from dotenv import load_dotenv
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+
+from ..data.mock_events import get_mock_events
+from ..schemas.events import Event, EventList
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_MODEL = "gpt-4.1-mini"
+_MODEL_FALLBACKS = ("gpt-4.1", "gpt-4o-mini", "gpt-4o")
+
+_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            (
+                "You transform contextual information into structured event recommendations. "
+                "Always reply using the EventList schema with fields: name, description, emoji, "
+                "event_score (0-10), location (x,y coordinates), and optional link."
+            ),
+        ),
+        (
+            "human",
+            "Context:\n{context}\n\nReturn up to {max_events} high-quality events.",
+        ),
+    ]
+)
 
 
 class LLM:
-    """Service for interacting with LLMs via OpenRouter for event suggestions."""
-    
-    def __init__(self):
-        """Initialize the LLM service with OpenRouter configuration."""
-        load_dotenv()
-        os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
-        self.agent = create_agent(
-            model="gpt-5",
-            response_format=EventList,
-        )
-    
+    """Service for interacting with OpenAI models for event suggestions."""
+
+    def __init__(self) -> None:
+        load_dotenv(dotenv_path=os.getenv("DOTENV_PATH", ".env"), override=False)
+        self._model_candidates: Sequence[str] = tuple(self._build_model_list())
+        if not self._model_candidates:
+            raise RuntimeError(
+                "No OpenAI models configured. Set OPENAI_MODEL or OPENAI_MODEL_FALLBACKS."
+            )
+        self._active_model: str | None = None
+
     def generate_event_suggestions(
-        self, 
-        context: Any, 
+        self,
+        context: Any,
+        *,
+        max_events: int = 8,
     ) -> List[Event]:
-        """
-        Generate event suggestions using ChatGPT via OpenRouter.
-        
-        Args:
-            context: Context data from ContextAggregator
-            number_events: Number of events to generate
-            
-        Returns:
-            List of Event objects
-        """
-        model_response = self.agent.invoke({
-            "messages": [{"role": "user", "content": f"Extract event objects from {context}"}]
-        })
-        # TODO: Parse response and convert to Event objects
-        # TODO: Add error handling and fallback??
-        return model_response["structured_response"].events
-    
-    def test_method(self) -> str:
-        """Test method to verify LLM connectivity."""
-        response = self.model.invoke("Suggest things to do in Edinburgh.")
-        return response.content
+        """Generate structured event suggestions using the first available model."""
+        context_text = self._format_context(context)
+        last_error: Exception | None = None
+
+        for model_name in self._model_candidates:
+            try:
+                structured_chain = self._build_chain(model_name)
+                result: EventList = structured_chain.invoke(
+                    {"context": context_text, "max_events": max_events}
+                )
+                self._active_model = model_name
+                return list(result.events)
+            except Exception as exc:  # pragma: no cover - network dependent
+                last_error = exc
+                logger.warning(
+                    "Model %s failed: %s. Trying next candidate if available.",
+                    model_name,
+                    exc,
+                )
+
+        raise RuntimeError(
+            "All configured OpenAI models failed. "
+            "Last error: {}".format(last_error or "Unknown error")
+        )
+
+    def _build_chain(self, model_name: str):
+        """Create a structured output chain for the requested model."""
+        llm = ChatOpenAI(model=model_name)
+        structured_llm = llm.with_structured_output(EventList)
+        return _PROMPT | structured_llm
+
+    @staticmethod
+    def _format_context(context: Any) -> str:
+        """Coerce arbitrary context payloads into a readable string for prompting."""
+        if isinstance(context, str):
+            return context
+        if isinstance(context, Mapping):
+            try:
+                return json.dumps(context, indent=2)
+            except TypeError:
+                return str(dict(context))
+        if isinstance(context, Iterable) and not isinstance(context, (bytes, bytearray)):
+            return "\n".join(str(item) for item in context)
+        return str(context)
+
+    @staticmethod
+    def _build_model_list() -> List[str]:
+        """Return the ordered list of model names to attempt."""
+        configured = os.getenv("OPENAI_MODEL")
+        fallbacks = os.getenv("OPENAI_MODEL_FALLBACKS")
+
+        models: List[str] = []
+        if configured:
+            models.extend(_split_models(configured))
+        else:
+            models.append(_DEFAULT_MODEL)
+
+        if fallbacks:
+            models.extend(_split_models(fallbacks))
+        else:
+            models.extend(model for model in _MODEL_FALLBACKS if model not in models)
+
+        # Remove duplicates while preserving order
+        seen: set[str] = set()
+        deduped: List[str] = []
+        for model in models:
+            if model and model not in seen:
+                seen.add(model)
+                deduped.append(model)
+        return deduped
+
+    @staticmethod
+    def _get_fallback_events(limit: int = 8) -> List[Event]:
+        """Return fallback events bundled with the application."""
+        return get_mock_events(limit)
+
+
+def _split_models(raw: str) -> List[str]:
+    """Split a comma- or whitespace-separated string of model names."""
+    return [chunk.strip() for chunk in raw.replace(",", " ").split() if chunk.strip()]

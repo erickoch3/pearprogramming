@@ -62,7 +62,9 @@ class ActivitySuggestionGenerator:
         context = TEST_CONTEXT  # self._context_aggregator.gather_context(response_preferences)
         # preferences = context["preferences"]
 
-        ranked_events = LLM().generate_event_suggestions(context=context)
+        ranked_events = LLM().generate_event_suggestions(
+            context=context, max_events=number_events
+        )
         return ranked_events
 
     def _get_ranked_events(self, preferences: str) -> List[Event]:
