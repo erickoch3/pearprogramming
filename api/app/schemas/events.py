@@ -6,10 +6,12 @@ from pydantic import BaseModel, Field
 class Event(BaseModel):
     """Represents a suggested activity."""
 
-    location: Tuple[int, int] = Field(..., description="Cartesian location coordinates")
+    location: Tuple[float, float] = Field(
+        ..., description="Cartesian location coordinates"
+    )
     name: str = Field(..., description="Human-readable name for the event")
     emoji: str = Field(..., description="Emoji summarizing the event vibe")
-    event_score: int = Field(
+    event_score: float = Field(
         ...,
         ge=0,
         le=10,
@@ -40,4 +42,3 @@ class GetEventRecommendationsResponse(BaseModel):
     """Response payload containing recommended events."""
 
     events: list[Event] = Field(default_factory=list, description="Recommended events")
-

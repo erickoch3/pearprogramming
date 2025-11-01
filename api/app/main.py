@@ -1,4 +1,5 @@
 from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from .schemas.events import GetEventRecommendationsRequest, GetEventRecommendationsResponse
 from .routers import auth
@@ -6,6 +7,19 @@ from .services.activity_suggestion_generator import ActivitySuggestionGenerator
 from .services.context_aggregator import ContextAggregator
 
 app = FastAPI(title="Pear Programming API", version="0.1.0")
+
+# Allow browser clients (e.g., Next.js dev server) to call the API during development.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://0.0.0.0:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Include routers
 app.include_router(auth.router)
@@ -26,6 +40,7 @@ def get_activity_suggestion_generator(
 @app.post(
     "/events/recommendations",
     response_model=GetEventRecommendationsResponse,
+    response_model_exclude_none=True,
     summary="Generate activity recommendations",
 )
 async def get_event_recommendations(
@@ -38,4 +53,3 @@ async def get_event_recommendations(
         response_preferences=request.response_preferences,
     )
     return GetEventRecommendationsResponse(events=events)
-

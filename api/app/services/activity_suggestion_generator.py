@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from typing import List
 
 from ..schemas.events import Event
+from ..data.mock_events import get_mock_events
 from .context_aggregator import ContextAggregator
 
 
@@ -11,11 +13,15 @@ class ActivitySuggestionGenerator:
 
     def __init__(self, context_aggregator: ContextAggregator) -> None:
         self._context_aggregator = context_aggregator
+        self._mock_mode_enabled = os.getenv("MOCK") == "1"
 
     def generate_suggestions(
         self, number_events: int, response_preferences: str | None
     ) -> List[Event]:
         """Produce event recommendations matching the caller's preferences."""
+        if self._mock_mode_enabled:
+            return get_mock_events(number_events)
+
         context = self._context_aggregator.gather_context(response_preferences)
         preferences = context["preferences"]
 
@@ -66,4 +72,3 @@ class ActivitySuggestionGenerator:
             event for event in sample_events if preferences in event.description.lower()
         ]
         return filtered or sample_events
-
