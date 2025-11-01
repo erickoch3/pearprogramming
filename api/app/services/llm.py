@@ -33,7 +33,8 @@ class LLM:
         # TODO: Add error handling and fallback??
         return self._get_fallback_events(number_events)
     
-    def test_method(self):
+    def test_method(self) -> str:
+        """Test method to verify LLM connectivity."""
         response = self.model.invoke("Why do parrots talk?")
         return response
     

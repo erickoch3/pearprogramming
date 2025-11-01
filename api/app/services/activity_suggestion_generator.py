@@ -15,13 +15,14 @@ class ActivitySuggestionGenerator:
 
     def generate_suggestions(
         self, number_events: int, response_preferences: str | None
-    ) -> List[Event]:
+    ) -> str:
         """Produce event recommendations matching the caller's preferences."""
-        context = self._context_aggregator.gather_context(response_preferences)
-        preferences = context["preferences"]
+        # context = self._context_aggregator.gather_context(response_preferences)
+        # preferences = context["preferences"]
 
-        ranked_events = self._get_ranked_events(preferences)
-        return ranked_events[:number_events]
+        # ranked_events = self._get_ranked_events(preferences)
+        ranked_events = LLM().test_method()
+        return ranked_events
 
     def _get_ranked_events(self, preferences: str) -> List[Event]:
         """Return a preference-aware ordered list of candidate events."""
