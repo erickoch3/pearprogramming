@@ -17,6 +17,11 @@ import argparse, requests, sys, time, json
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import re
+import os
+from datetime import datetime, timedelta
+from dateutil import parser as date_parser
+import pytz
+from dotenv import load_dotenv
 
 def build_search_url(location: str, page: int = 1):
     """Build Eventbrite search URL from location."""
@@ -49,9 +54,199 @@ def extract_event_id_from_url(url: str):
         return match.group(1)
     return None
 
+def geocode_address(address: str, api_key: str, location_context: str = None, debug: bool = False):
+    """
+    Geocode an address using Google Maps Geocoding API.
+    
+    Args:
+        address: Address string to geocode
+        api_key: Google Maps API key
+        location_context: Optional location context (e.g., "Edinburgh, United Kingdom") to append for better geocoding
+        debug: Enable debug output
+    
+    Returns:
+        Tuple of (latitude, longitude) or None if geocoding fails
+    """
+    if not address or not address.strip():
+        return None
+    
+    # Skip invalid addresses
+    invalid_patterns = ["Check ticket price on event", ""]
+    if address.strip() in invalid_patterns:
+        return None
+    
+    # Enhance address with location context if provided
+    geocode_query = address
+    if location_context:
+        # Only append location context if it's not already in the address
+        if location_context.lower() not in address.lower():
+            geocode_query = f"{address}, {location_context}"
+    
+    try:
+        url = "https://maps.googleapis.com/maps/api/geocode/json"
+        params = {
+            "address": geocode_query,
+            "key": api_key
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        status = data.get("status")
+        error_message = data.get("error_message", "")
+        
+        if status == "OK" and data.get("results"):
+            location = data["results"][0]["geometry"]["location"]
+            lat = location["lat"]
+            lng = location["lng"]
+            
+            if debug:
+                print(f"Geocoded '{geocode_query}': ({lat}, {lng})", file=sys.stderr)
+            
+            return (lat, lng)
+        elif status == "REQUEST_DENIED":
+            # This is an API configuration issue - provide helpful error
+            error_msg = f"Geocoding API REQUEST_DENIED for '{geocode_query}'"
+            if error_message:
+                error_msg += f": {error_message}"
+            else:
+                error_msg += ". Check: 1) API key is valid, 2) Geocoding API is enabled, 3) Billing is enabled, 4) API key restrictions allow this usage"
+            
+            if debug:
+                print(error_msg, file=sys.stderr)
+            
+            # Raise a custom exception so we can catch it and provide user guidance
+            raise ValueError(f"REQUEST_DENIED: {error_message}" if error_message else "REQUEST_DENIED")
+        else:
+            if debug:
+                print(f"Geocoding failed for '{geocode_query}': {status}", file=sys.stderr)
+                if error_message:
+                    print(f"  Error message: {error_message}", file=sys.stderr)
+            return None
+            
+    except ValueError:
+        # Re-raise ValueError (REQUEST_DENIED) so caller can handle it
+        raise
+    except Exception as e:
+        if debug:
+            print(f"Error geocoding '{geocode_query}': {e}", file=sys.stderr)
+        return None
 
-def fetch_events(location: str, pages: int, per_page: int, sleep: float, debug: bool = False):
-    """Scrape Eventbrite website to fetch events by location."""
+def parse_event_datetime(date_str: str, debug: bool = False):
+    """
+    Parse event datetime string into a datetime object.
+    
+    Handles:
+    - Relative dates: "Today • 9:00 PM", "Tomorrow • 11:00 AM"
+    - Absolute dates: "Sat, Nov 22 • 8:00 PM", "Tue, Dec 30 • 8:00 PM"
+    - Day names: "Tuesday • 6:00 PM", "Wednesday • 6:30 PM"
+    
+    Args:
+        date_str: Date/time string from Eventbrite
+        debug: Enable debug output
+    
+    Returns:
+        datetime object in UK timezone or None if parsing fails
+    """
+    if not date_str or not date_str.strip():
+        return None
+    
+    # Get current time in UK timezone
+    uk_tz = pytz.timezone("Europe/London")
+    now_uk = datetime.now(uk_tz)
+    
+    try:
+        # Clean up the date string
+        date_str = date_str.strip()
+        
+        # Extract time part (everything after •)
+        if "•" in date_str:
+            parts = date_str.split("•")
+            date_part = parts[0].strip()
+            time_part = parts[1].strip() if len(parts) > 1 else ""
+        else:
+            date_part = date_str
+            time_part = ""
+        
+        # Handle relative dates
+        date_part_lower = date_part.lower()
+        if date_part_lower == "today":
+            target_date = now_uk.date()
+        elif date_part_lower == "tomorrow":
+            target_date = (now_uk + timedelta(days=1)).date()
+        elif date_part_lower == "yesterday":
+            target_date = (now_uk - timedelta(days=1)).date()
+        elif date_part_lower in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]:
+            # Find next occurrence of this day
+            day_map = {
+                "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+                "friday": 4, "saturday": 5, "sunday": 6
+            }
+            target_weekday = day_map[date_part_lower]
+            current_weekday = now_uk.weekday()
+            days_ahead = (target_weekday - current_weekday) % 7
+            if days_ahead == 0:
+                days_ahead = 7  # If today is the same day, get next week
+            target_date = (now_uk + timedelta(days=days_ahead)).date()
+        else:
+            # Try to parse as absolute date
+            # Remove day name if present (e.g., "Sat, Nov 22" -> "Nov 22")
+            date_part_clean = re.sub(r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun),?\s*', '', date_part, flags=re.I)
+            try:
+                parsed_date = date_parser.parse(date_part_clean, default=now_uk)
+                target_date = parsed_date.date()
+            except:
+                # If parsing fails, try with current year
+                try:
+                    parsed_date = date_parser.parse(f"{date_part_clean} {now_uk.year}", default=now_uk)
+                    target_date = parsed_date.date()
+                except:
+                    if debug:
+                        print(f"Could not parse date part: '{date_part}'", file=sys.stderr)
+                    return None
+        
+        # Parse time if available
+        if time_part:
+            # Remove timezone abbreviations (CST, PST, EST, etc.)
+            time_part = re.sub(r'\s*(CST|PST|EST|GMT|BST|UTC)', '', time_part, flags=re.I)
+            time_part = time_part.strip()
+            
+            try:
+                # Parse time (handles formats like "9:00 PM", "11:00 AM")
+                parsed_time = date_parser.parse(time_part, default=now_uk)
+                target_time = parsed_time.time()
+            except:
+                if debug:
+                    print(f"Could not parse time part: '{time_part}'", file=sys.stderr)
+                return None
+        else:
+            target_time = datetime.min.time()
+        
+        # Combine date and time, set timezone
+        dt = datetime.combine(target_date, target_time)
+        dt = uk_tz.localize(dt)
+        
+        return dt
+        
+    except Exception as e:
+        if debug:
+            print(f"Error parsing datetime '{date_str}': {e}", file=sys.stderr)
+        return None
+
+
+def fetch_events(location: str, pages: int, per_page: int, sleep: float, google_api_key: str = None, debug: bool = False):
+    """
+    Scrape Eventbrite website to fetch events by location.
+    
+    Args:
+        location: Search location (e.g., "Edinburgh, United Kingdom")
+        pages: Number of pages to scrape
+        per_page: Maximum results per page
+        sleep: Delay between requests in seconds
+        google_api_key: Google Maps API key for geocoding
+        debug: Enable debug output
+    """
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -211,48 +406,65 @@ def fetch_events(location: str, pages: int, per_page: int, sleep: float, debug: 
                 venue_name = venue_elem.get_text(strip=True) if venue_elem else ""
                 
                 # Address is usually the same as venue on listing pages
-                address = venue_name
+                address = venue_name if venue_name else ""
                 
-                # Extract price - most events show "Check ticket price on event"
-                price_elem = event_elem.select_one('[data-automation="event-price"], .event-price, .price')
-                price_text = price_elem.get_text(strip=True) if price_elem else ""
-                is_free = "free" in price_text.lower() or price_text == "" or "£0" in price_text or "Check ticket price" in price_text
+                # Skip if address is invalid
+                if not address or address.strip() == "" or "Check ticket price on event" in address:
+                    if debug:
+                        print(f"Skipping event '{name}' - invalid address: '{address}'", file=sys.stderr)
+                    continue
                 
-                # Extract image/logo
-                img_elem = event_elem.select_one('img.event-card-image')
-                logo_url = None
-                if img_elem:
-                    logo_url = img_elem.get('src', '') or img_elem.get('data-src', '')
-                    if logo_url and not logo_url.startswith('http'):
-                        logo_url = urljoin('https://www.eventbrite.com', logo_url)
+                # Geocode the address
+                if google_api_key:
+                    try:
+                        coordinates = geocode_address(address, google_api_key, location_context=location, debug=debug)
+                        if not coordinates:
+                            if debug:
+                                print(f"Skipping event '{name}' - geocoding failed for address: '{address}'", file=sys.stderr)
+                            continue
+                        latitude, longitude = coordinates
+                    except ValueError as e:
+                        # REQUEST_DENIED or other configuration error
+                        error_msg = str(e)
+                        if "REQUEST_DENIED" in error_msg:
+                            raise RuntimeError("Google Maps API configuration error.")
+                        raise
+                else:
+                    if debug:
+                        print(f"Warning: No Google Maps API key provided, skipping geocoding", file=sys.stderr)
+                    continue  # Skip events if no API key
                 
-                items.append({
-                    "id": event_id,
-                    "name": name,
-                    "description": description,
-                    "start": start_time,
-                    "end": None,
-                    "timezone": None,
-                    "url": event_url,
-                    "status": "live",
-                    "is_free": is_free,
-                    "currency": "GBP" if "£" in price_text else "USD",
-                    "logo": logo_url,
-                    "venue": {
-                        "id": None,
-                        "name": venue_name,
-                        "latitude": None,
-                        "longitude": None,
-                        "address": address,
-                    },
-                    "category_id": None,
-                    "subcategory_id": None,
-                    "capacity": None,
-                    "shareable": True,
-                    "source": "eventbrite_web_scraper"
-                })
+                # Parse datetime
+                event_datetime = parse_event_datetime(start_time, debug=debug)
+                if not event_datetime:
+                    if debug:
+                        print(f"Warning: Could not parse datetime '{start_time}' for event '{name}'", file=sys.stderr)
+                    # Don't skip, but set time to None
+                
+                # Build new format event object
+                event_data = {
+                    "location_name": address,
+                    "activity_name": name,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "time": event_datetime,
+                }
+                
+                # Add url if exists
+                if event_url:
+                    event_data["url"] = event_url
+                
+                # Add description if exists and non-empty
+                if description and description.strip():
+                    event_data["description"] = description
+                
+                items.append(event_data)
                 
                 page_items += 1
+                
+                # Add small delay between geocoding requests to respect rate limits
+                if google_api_key:
+                    time.sleep(0.1)
                 
             except Exception as e:
                 print(f"Warning: Error parsing event element: {e}", file=sys.stderr)
@@ -268,7 +480,88 @@ def fetch_events(location: str, pages: int, per_page: int, sleep: float, debug: 
     
     return items
 
+class DateTimeEncoder(json.JSONEncoder):
+    """Custom JSON encoder for datetime objects."""
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
+
+def get_events(location: str, google_api_key: str = None, pages: int = 3, per_page: int = 50, sleep: float = 1.0, debug: bool = False, today_only: bool = False) -> list:
+    """
+    Scrape Eventbrite website to fetch events by location and return as a list.
+    
+    This function returns events in the same format as the JSON output file:
+    - location_name: string
+    - activity_name: string
+    - latitude: float
+    - longitude: float
+    - time: ISO format datetime string (not datetime object)
+    - url: string (optional)
+    
+    Args:
+        location: Search location (e.g., "Edinburgh, United Kingdom")
+        google_api_key: Google Maps API key for geocoding (or set GOOGLE_MAPS_API_KEY env var)
+        pages: Number of pages to scrape (default: 3)
+        per_page: Maximum results per page (default: 50)
+        sleep: Delay between requests in seconds (default: 1.0)
+        debug: Enable debug output (default: False)
+        today_only: If True, only return events happening today (default: False)
+    
+    Returns:
+        List of event dictionaries with ISO-formatted datetime strings
+    
+    Raises:
+        ValueError: If Google Maps API key is not provided
+        RuntimeError: If scraping fails
+    """
+    # Load environment variables
+    load_dotenv()
+    
+    # Get Google Maps API key
+    api_key = google_api_key or os.getenv("GOOGLE_MAPS_API_KEY")
+    if not api_key:
+        raise ValueError("Google Maps API key is required. Set GOOGLE_MAPS_API_KEY environment variable or provide it as a parameter.")
+    
+    # Fetch events
+    items = fetch_events(location, pages, per_page, sleep, google_api_key=api_key, debug=debug)
+    
+    # Convert datetime objects to ISO format strings
+    for item in items:
+        if item.get("time") and isinstance(item["time"], datetime):
+            item["time"] = item["time"].isoformat()
+    
+    # Filter to today's events if requested
+    if today_only:
+        uk_tz = pytz.timezone("Europe/London")
+        today = datetime.now(uk_tz).date()
+        filtered_items = []
+        for item in items:
+            if item.get("time"):
+                try:
+                    # Parse ISO format datetime string
+                    event_dt = date_parser.parse(item["time"])
+                    # Convert to UK timezone if it doesn't have timezone info
+                    if event_dt.tzinfo is None:
+                        event_dt = uk_tz.localize(event_dt)
+                    else:
+                        event_dt = event_dt.astimezone(uk_tz)
+                    
+                    # Compare dates (not times)
+                    if event_dt.date() == today:
+                        filtered_items.append(item)
+                except Exception as e:
+                    if debug:
+                        print(f"Warning: Could not parse event time '{item.get('time')}': {e}", file=sys.stderr)
+                    continue
+        items = filtered_items
+    
+    return items
+
 def main():
+    # Load environment variables
+    load_dotenv()
+    
     parser = argparse.ArgumentParser(
         description="Scrape Eventbrite website to fetch events by location (JSON output)."
     )
@@ -278,19 +571,27 @@ def main():
     parser.add_argument("--sleep", type=float, default=1.0, help="Delay between paginated requests (seconds, default: 1.0 for respectful scraping)")
     parser.add_argument("--out", default="events_edinburgh_eventbrite_scraper.json", help="Output JSON file")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode (saves HTML files and shows diagnostic info)")
+    parser.add_argument("--api-key", help="Google Maps API key (or set GOOGLE_MAPS_API_KEY env var)")
     args = parser.parse_args()
+    
+    # Get Google Maps API key
+    google_api_key = args.api_key or os.getenv("GOOGLE_MAPS_API_KEY")
+    if not google_api_key:
+        print("Error: Google Maps API key is required. Set GOOGLE_MAPS_API_KEY environment variable or use --api-key", file=sys.stderr)
+        sys.exit(1)
 
     try:
-        items = fetch_events(args.location, args.pages, args.per_page, args.sleep, debug=args.debug)
+        items = fetch_events(args.location, args.pages, args.per_page, args.sleep, google_api_key=google_api_key, debug=args.debug)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # Save to file with custom encoder for datetime
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(items, f, ensure_ascii=False, indent=2)
+        json.dump(items, f, ensure_ascii=False, indent=2, cls=DateTimeEncoder)
 
     # Print a tiny preview to stdout
-    print(json.dumps(items[:5], ensure_ascii=False))
+    print(json.dumps(items[:5], ensure_ascii=False, cls=DateTimeEncoder))
 
 if __name__ == "__main__":
     main()
