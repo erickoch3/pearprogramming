@@ -6,8 +6,8 @@ import sys
 import argparse
 import requests
 import time
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Add parent directory to path to enable imports
@@ -24,11 +24,12 @@ load_dotenv(dotenv_path=env_path)
 
 API_URL = "https://api.x.com/2/tweets/search/recent"
 
-# --- Load API key from environment ---
-API_KEY = os.getenv("X_API_KEY")
-if not API_KEY:
-    raise ValueError("Please set the X_API_KEY environment variable.")
-# -------------------------------------
+def _require_api_key() -> str:
+    """Return the configured X API key or raise a helpful error."""
+    api_key = os.getenv("X_API_KEY")
+    if not api_key:
+        raise ValueError("Please set the X_API_KEY environment variable.")
+    return api_key
 
 # Keywords that tend to indicate real-world activities
 # Prioritized list kept under query length limit (512 chars)
@@ -155,6 +156,7 @@ def write_tweets_to_db(limit=10):
     # Create database tables if they don't exist
     Base.metadata.create_all(bind=engine)
 
+    api_key = _require_api_key()
     query = build_query()
 
     # Validate query length (X API v2 has a 512 character limit)
@@ -179,7 +181,9 @@ def write_tweets_to_db(limit=10):
     try:
         while total < limit:
             remaining = min(10, limit - total)
-            data = fetch_page(API_KEY, query, next_token=next_token, max_results=remaining)
+            data = fetch_page(
+                api_key, query, next_token=next_token, max_results=remaining
+            )
             includes = data.get("includes", {})
             users = index_users(includes)
 

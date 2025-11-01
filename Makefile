@@ -1,4 +1,4 @@
-.PHONY: install api mockapi ui mockui clean help
+.PHONY: install api mockapi ui mockui clean help test democontext
 
 # Virtual environment directory
 VENV := .venv
@@ -15,6 +15,7 @@ help:
 	@echo "  make mockapi    - Start the FastAPI backend with mock data (MOCK=1)"
 	@echo "  make ui         - Start the Next.js UI development server"
 	@echo "  make mockui     - Start the Next.js UI with mock data (NEXT_PUBLIC_MOCK=1)"
+	@echo "  make test       - Run the pytest suite"
 	@echo "  make clean      - Remove virtual environment"
 
 install:
@@ -27,6 +28,10 @@ install:
 	fi
 	@echo "Installing dependencies from api/requirements.txt..."
 	@$(UV) pip install --python $(VENV) -r api/requirements.txt
+	@if [ -f api/requirements-dev.txt ]; then \
+		echo "Installing development dependencies from api/requirements-dev.txt..."; \
+		$(UV) pip install --python $(VENV) -r api/requirements-dev.txt; \
+	fi
 	@echo "Installation complete!"
 
 api:
@@ -52,6 +57,28 @@ ui:
 mockui:
 	@echo "Starting Next.js UI with mock data..."
 	@cd ui && NEXT_PUBLIC_MOCK=1 yarn run dev
+
+test:
+	@if [ ! -d $(VENV) ]; then \
+		echo "Virtual environment not found. Running 'make install'..."; \
+		$(MAKE) install; \
+	fi
+	@echo "Running pytest..."
+	@set -a; \
+	[ -f .env ] && . .env; \
+	set +a; \
+	$(PYTHON) -m pytest
+
+democontext:
+	@if [ ! -d $(VENV) ]; then \
+		echo "Virtual environment not found. Running 'make install'..."; \
+		$(MAKE) install; \
+	fi
+	@echo "Gathering demo context..."
+	@set -a; \
+	[ -f .env ] && . .env; \
+	set +a; \
+	$(PYTHON) -c 'import json, os; from api.app.services.context_aggregator import ContextAggregator; preferences = os.getenv("PREFERENCES"); context = ContextAggregator().gather_context(preferences); print(json.dumps(context, indent=2, default=str))'
 
 clean:
 	@echo "Removing virtual environment..."
