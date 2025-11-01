@@ -5,6 +5,7 @@ import { useMemo } from "react";
 
 import { useLeafletModules } from "@/hooks/useLeafletModules";
 import { toLatLng } from "@/lib/map";
+import { sanitizeEmoji } from "@/lib/security";
 import type { Event } from "@/types/events";
 
 type DivIconFactory = typeof import("leaflet")["divIcon"];
@@ -120,8 +121,9 @@ export function EventDetailsModal({ event, onClose }: EventDetailsModalProps) {
 }
 
 function createEmojiIcon(divIconFn: DivIconFactory, emoji: string) {
+  const safeEmoji = sanitizeEmoji(emoji);
   return divIconFn({
-    html: `<div style="font-size: 2rem; filter: drop-shadow(0 6px 12px rgba(0,0,0,0.25));">${emoji}</div>`,
+    html: `<div style="font-size: 2rem; filter: drop-shadow(0 6px 12px rgba(0,0,0,0.25));">${safeEmoji}</div>`,
     className: "",
     iconSize: [36, 36],
     iconAnchor: [18, 18],

@@ -26,12 +26,21 @@ export function useEventRecommendations(
   const [loading, setLoading] = useState<boolean>(autoLoad);
   const [error, setError] = useState<string | null>(null);
 
+  // Destructure primitive values to avoid object reference issues in dependencies
+  const numberEvents = request.number_events;
+  const responsePreferences = request.response_preferences;
+
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
-      const response = await fetchEventRecommendations(request);
+      // Reconstruct request object from stable primitive values
+      const requestPayload: GetEventRecommendationsRequest = {
+        number_events: numberEvents,
+        response_preferences: responsePreferences,
+      };
+      const response = await fetchEventRecommendations(requestPayload);
       setEvents(response.events);
       return response;
     } catch (err) {
@@ -40,7 +49,7 @@ export function useEventRecommendations(
     } finally {
       setLoading(false);
     }
-  }, [request]);
+  }, [numberEvents, responsePreferences]);
 
   useEffect(() => {
     if (!autoLoad) {

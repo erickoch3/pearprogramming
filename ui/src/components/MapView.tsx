@@ -6,6 +6,7 @@ import { useLeafletModules } from "@/hooks/useLeafletModules";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import type { MapMode } from "@/hooks/useUserSettings";
 import { EDINBURGH_CENTER, toLatLng } from "@/lib/map";
+import { sanitizeEmoji } from "@/lib/security";
 import type { Event } from "@/types/events";
 
 import type { Map as LeafletMap } from "leaflet";
@@ -46,9 +47,16 @@ function MapUpdater({ events, userLocation, useMapHook }: {
 }) {
   const map = useMapHook();
   const [hasInitialized, setHasInitialized] = useState(false);
+  const [prevEventCount, setPrevEventCount] = useState(0);
 
   useEffect(() => {
     if (!map || events.length === 0) return;
+
+    // Reset initialization state if events changed significantly
+    if (events.length !== prevEventCount && prevEventCount !== 0) {
+      setHasInitialized(false);
+    }
+    setPrevEventCount(events.length);
 
     const bounds: [number, number][] = [];
 
@@ -76,7 +84,7 @@ function MapUpdater({ events, userLocation, useMapHook }: {
         setHasInitialized(true);
       }
     }
-  }, [map, events, userLocation, hasInitialized]);
+  }, [map, events, userLocation, hasInitialized, prevEventCount]);
 
   return null;
 }
@@ -85,21 +93,46 @@ export function MapView({ events }: MapViewProps) {
   const leafletModules = useLeafletModules();
   const { mapMode } = useUserSettings();
   const [userLocation, setUserLocation] = useState<UserLocation | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
 
   useEffect(() => {
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setUserLocation({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          });
-        },
-        (error) => {
-          console.warn("Could not get user location:", error);
-        }
-      );
+    if (!("geolocation" in navigator)) {
+      setLocationError("Geolocation is not supported by your browser");
+      return;
     }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setUserLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        });
+        setLocationError(null);
+      },
+      (error) => {
+        let errorMessage = "Unable to get your location";
+
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            errorMessage = "Location access denied. Enable location permissions to see your position on the map.";
+            break;
+          case error.POSITION_UNAVAILABLE:
+            errorMessage = "Location information unavailable. Please check your device settings.";
+            break;
+          case error.TIMEOUT:
+            errorMessage = "Location request timed out. Please try refreshing the page.";
+            break;
+        }
+
+        setLocationError(errorMessage);
+        console.warn("Geolocation error:", error);
+      },
+      {
+        enableHighAccuracy: false,
+        timeout: 10000,
+        maximumAge: 300000, // Cache location for 5 minutes
+      }
+    );
   }, []);
 
   if (!leafletModules) {
@@ -114,73 +147,98 @@ export function MapView({ events }: MapViewProps) {
   const tileConfig = MAP_TILES[mapMode];
 
   return (
-    <MapContainer
-      center={EDINBURGH_CENTER}
-      zoom={13}
-      className="h-full w-full rounded-2xl overflow-hidden"
-      style={{ height: "100%", minHeight: "400px" }}
-      scrollWheelZoom
-      zoomControl={false}
-    >
-      <TileLayer
-        key={mapMode}
-        attribution={tileConfig.attribution}
-        url={tileConfig.url}
-        maxZoom={20}
-      />
-
-      <MapUpdater events={events} userLocation={userLocation} useMapHook={useMap} />
-
-      {userLocation && (
-        <Marker
-          position={[userLocation.lat, userLocation.lng]}
-          icon={createUserLocationIcon(divIcon)}
-          zIndexOffset={1000}
+    <div className="relative h-full w-full">
+      <MapContainer
+        center={EDINBURGH_CENTER}
+        zoom={13}
+        className="h-full w-full rounded-2xl overflow-hidden"
+        style={{ height: "100%", minHeight: "400px" }}
+        scrollWheelZoom
+        zoomControl={false}
+      >
+        <TileLayer
+          key={mapMode}
+          attribution={tileConfig.attribution}
+          url={tileConfig.url}
+          maxZoom={20}
         />
-      )}
 
-      {events.map((event) => (
-        <Marker
-          key={`${event.name}-${event.location[0]}-${event.location[1]}`}
-          position={toLatLng(event.location)}
-          icon={createEmojiIcon(divIcon, event.emoji)}
+        <MapUpdater events={events} userLocation={userLocation} useMapHook={useMap} />
+
+        {userLocation && (
+          <Marker
+            position={[userLocation.lat, userLocation.lng]}
+            icon={createUserLocationIcon(divIcon)}
+            zIndexOffset={1000}
+          />
+        )}
+
+        {events.map((event) => (
+          <Marker
+            key={`${event.name}-${event.location[0]}-${event.location[1]}`}
+            position={toLatLng(event.location)}
+            icon={createEmojiIcon(divIcon, event.emoji)}
+          >
+            <Popup className="modern-popup" maxWidth={280} closeButton={false}>
+              <div className="space-y-2.5 p-1">
+                <div className="flex items-start gap-2.5">
+                  <div className="text-2xl leading-none">{event.emoji}</div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-semibold text-base text-neutral-900 dark:text-neutral-50 leading-tight">
+                      {event.name}
+                    </h3>
+                    <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-1.5 leading-relaxed">
+                      {event.description}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-2 border-t border-neutral-200 dark:border-neutral-700">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400">Score:</span>
+                    <span className="text-sm font-semibold text-blue-600 dark:text-blue-400">
+                      {event.event_score}/10
+                    </span>
+                  </div>
+                  {event.link ? (
+                    <a
+                      href={event.link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
+                    >
+                      View details →
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+            </Popup>
+          </Marker>
+        ))}
+      </MapContainer>
+
+      {locationError && (
+        <div
+          className="absolute bottom-4 left-4 right-4 z-1000 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800 shadow-lg dark:border-yellow-900/50 dark:bg-yellow-950/40 dark:text-yellow-200"
+          role="alert"
         >
-          <Popup className="modern-popup" maxWidth={280} closeButton={false}>
-            <div className="space-y-2.5 p-1">
-              <div className="flex items-start gap-2.5">
-                <div className="text-2xl leading-none">{event.emoji}</div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-semibold text-base text-neutral-900 dark:text-neutral-50 leading-tight">
-                    {event.name}
-                  </h3>
-                  <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-1.5 leading-relaxed">
-                    {event.description}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center justify-between pt-2 border-t border-neutral-200 dark:border-neutral-700">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400">Score:</span>
-                  <span className="text-sm font-semibold text-blue-600 dark:text-blue-400">
-                    {event.event_score}/10
-                  </span>
-                </div>
-                {event.link ? (
-                  <a
-                    href={event.link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
-                  >
-                    View details →
-                  </a>
-                ) : null}
-              </div>
-            </div>
-          </Popup>
-        </Marker>
-      ))}
-    </MapContainer>
+          <div className="flex items-start gap-2">
+            <svg
+              className="h-5 w-5 shrink-0"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path
+                fillRule="evenodd"
+                d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z"
+                clipRule="evenodd"
+              />
+            </svg>
+            <p className="flex-1">{locationError}</p>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -200,11 +258,12 @@ function createUserLocationIcon(divIconFn: LeafletCore["divIcon"]) {
 }
 
 function createEmojiIcon(divIconFn: LeafletCore["divIcon"], emoji: string) {
+  const safeEmoji = sanitizeEmoji(emoji);
   return divIconFn({
     html: `
       <div class="modern-marker">
         <div class="marker-bg"></div>
-        <div class="marker-emoji">${emoji}</div>
+        <div class="marker-emoji">${safeEmoji}</div>
       </div>
     `,
     className: "",

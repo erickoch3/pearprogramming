@@ -3,6 +3,7 @@ import type {
   GetEventRecommendationsRequest,
   GetEventRecommendationsResponse,
 } from "@/types/events";
+import { validateEventRecommendationsResponse } from "@/lib/validation";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
@@ -38,9 +39,11 @@ export async function fetchEventRecommendations(
     );
   }
 
-  const payload = (await response.json()) as GetEventRecommendationsResponse;
+  const rawData = await response.json();
+  const payload = validateEventRecommendationsResponse(rawData);
+
   return {
-    events: payload.events?.map(normalizeEvent) ?? [],
+    events: payload.events.map(normalizeEvent),
   };
 }
 
