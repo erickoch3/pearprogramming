@@ -39,9 +39,9 @@ class Event(BaseModel):
         if isinstance(value, (tuple, list)) and len(value) == 2:
             return {"x": value[0], "y": value[1]}
         return value
-
+    
 class EventList(BaseModel):
-    events: List[Event] = Field(..., description="List of events.")
+    events: list[Event] = Field(..., description="List of events.")
 
 class GetEventRecommendationsRequest(BaseModel):
     """Request payload for generating event recommendations."""
