@@ -1,10 +1,14 @@
 from fastapi import Depends, FastAPI
 
 from .models import GetEventRecommendationsRequest, GetEventRecommendationsResponse
+from .routers import auth
 from .services.activity_suggestion_generator import ActivitySuggestionGenerator
 from .services.context_aggregator import ContextAggregator
 
 app = FastAPI(title="Pear Programming API", version="0.1.0")
+
+# Include routers
+app.include_router(auth.router)
 
 
 def get_context_aggregator() -> ContextAggregator:
