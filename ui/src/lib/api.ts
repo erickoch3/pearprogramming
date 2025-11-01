@@ -22,6 +22,13 @@ export async function fetchEventRecommendations(
     };
   }
 
+  return requestEventRecommendations(request, options);
+}
+
+async function requestEventRecommendations(
+  request: GetEventRecommendationsRequest,
+  options?: RequestInit,
+): Promise<GetEventRecommendationsResponse> {
   const response = await fetch(`${API_BASE_URL}${EVENT_RECOMMENDATIONS_PATH}`, {
     method: "POST",
     headers: {
