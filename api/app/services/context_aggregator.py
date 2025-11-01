@@ -171,6 +171,29 @@ class ContextAggregator:
         except FestivalsAPIError as exc:
             logger.warning("Festival fetch failed: %s", exc)
 
+        # Optionally include Eventbrite-scraped events when the optional scraper
+        # dependency is available and credentials are configured.
+        eventbrite_events: list[Any] = []
+        eventbrite_error: Optional[str] = None
+        if _eventbrite_get_events is not None:
+            try:
+                # Prefer a location that definitely works with the scraper. Using just the
+                # city still yields a valid Eventbrite discovery URL and helps geocoding
+                # via the location_context.
+                location = default_city
+                # Limit to today's events only if the requested date is today; otherwise
+                # return the broader set (the scraper does not support arbitrary dates).
+                today_only = resolved_date == date.today()
+                eventbrite_events = _eventbrite_get_events(
+                    location,
+                    today_only=today_only,
+                )
+            except Exception as exc:  # pragma: no cover - network/env dependent
+                logger.warning("Eventbrite fetch failed: %s", exc)
+                eventbrite_error = str(exc)
+        else:
+            logger.debug("Eventbrite scraper not available; skipping Eventbrite events")
+
         return {
             "date": resolved_date.isoformat(),
             "preferences": normalized_preferences,
@@ -178,4 +201,6 @@ class ContextAggregator:
             "weather": weather_payload,
             "weather_error": weather_error,
             "festival_events": festival_events,
+            "eventbrite_events": eventbrite_events,
+            "eventbrite_error": eventbrite_error,
         }
