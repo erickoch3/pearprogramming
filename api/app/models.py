@@ -39,5 +39,6 @@ class GetEventRecommendationsRequest(BaseModel):
 class GetEventRecommendationsResponse(BaseModel):
     """Response payload containing recommended events."""
 
-    events: list[Event] = Field(default_factory=list, description="Recommended events")
+    # events: list[Event] = Field(default_factory=list, description="Recommended events")
+    events: str = Field(..., description="Recommended events")
 

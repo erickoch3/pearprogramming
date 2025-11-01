@@ -2,15 +2,18 @@ import os
 from typing import Any, List, Mapping
 from langchain.chat_models import init_chat_model
 from ..models import Event
+from dotenv import load_dotenv
+
 
 
 class LLM:
     """Service for interacting with LLMs via OpenRouter for event suggestions."""
     
-    def __init__(self, api_key: str):
+    def __init__(self):
         """Initialize the LLM service with OpenRouter configuration."""
-        self.api_key = api_key
-        self.model = init_chat_model("gpts-4.1")
+        load_dotenv()
+        os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+        self.model = init_chat_model("gpt-4.1")
     
     def generate_event_suggestions(
         self, 
@@ -27,26 +30,15 @@ class LLM:
         Returns:
             List of Event objects
         """
-        # TODO: Create system and user prompts
-        # TODO: Make API call to ChatGPT via OpenRouter??
+        model_response = self.model.invoke("Generate a list of things to do in Edinburgh.")
         # TODO: Parse response and convert to Event objects
         # TODO: Add error handling and fallback??
-        return self._get_fallback_events(number_events)
+        return model_response.content
     
     def test_method(self) -> str:
         """Test method to verify LLM connectivity."""
-        response = self.model.invoke("Why do parrots talk?")
-        return response
-    
-    def _create_system_prompt(self) -> str:
-        """Create the system prompt for ChatGPT."""
-        # TODO: Define system prompt for event generation
-        return ""
-
-    def _create_user_prompt(self, context: Mapping[str, Any], number_events: int) -> str:
-        """Create the user prompt with context information."""
-        # TODO: Format context data into user prompt
-        return ""
+        response = self.model.invoke("Suggest things to do in Edinburgh.")
+        return response.content
     
     def _parse_llm_response(self, response_content: str) -> List[Event]:
         """
