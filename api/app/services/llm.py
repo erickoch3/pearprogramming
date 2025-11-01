@@ -1,7 +1,7 @@
 import os
 from typing import Any, List, Mapping
 from langchain.agents import create_agent
-from ..models import EventList
+from ..models import EventList, Event
 from dotenv import load_dotenv
 
 
@@ -21,7 +21,7 @@ class LLM:
     def generate_event_suggestions(
         self, 
         context: Any, 
-    ) -> EventList:
+    ) -> list[Event]:
         """
         Generate event suggestions using ChatGPT via OpenRouter.
         
@@ -37,26 +37,9 @@ class LLM:
         })
         # TODO: Parse response and convert to Event objects
         # TODO: Add error handling and fallback??
-        return model_response["structured_response"]
+        return model_response["structured_response"].events
     
     def test_method(self) -> str:
         """Test method to verify LLM connectivity."""
         response = self.model.invoke("Suggest things to do in Edinburgh.")
         return response.content
-    
-    def _parse_llm_response(self, response_content: str) -> EventList:
-        """
-        Parse the LLM response and convert to Event objects.
-        
-        Args:
-            response_content: Raw response from ChatGPT
-            
-        Returns:
-            List of Event objects
-        """
-        # TODO: Parse JSON response from ChatGPT
-        # TODO: Convert parsed data to Event objects
-        # TODO: Add validation and error handling
-        return []
-    
-
