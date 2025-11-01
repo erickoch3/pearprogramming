@@ -2,13 +2,14 @@ from typing import Optional, Tuple
 
 from pydantic import BaseModel, Field
 
+class Location(BaseModel):
+    x: int = Field(..., description="x coord")
+    y: int = Field(..., description="y coord") 
 
 class Event(BaseModel):
     """Represents a suggested activity."""
 
-    location: Tuple[float, float] = Field(
-        ..., description="Cartesian location coordinates"
-    )
+    location: Location = Field(..., description="Cartesian location coordinates")
     name: str = Field(..., description="Human-readable name for the event")
     emoji: str = Field(..., description="Emoji summarizing the event vibe")
     event_score: float = Field(
@@ -22,6 +23,8 @@ class Event(BaseModel):
         default=None, description="Optional URL for additional event information"
     )
 
+class EventList(BaseModel):
+    events: list[Event] = Field(..., description="List of events.")
 
 class GetEventRecommendationsRequest(BaseModel):
     """Request payload for generating event recommendations."""
