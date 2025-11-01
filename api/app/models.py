@@ -21,6 +21,9 @@ class Event(BaseModel):
     )
 
 
+class EventList(BaseModel):
+    events: list[Event] = Field(..., description="List of Events.")
+
 class GetEventRecommendationsRequest(BaseModel):
     """Request payload for generating event recommendations."""
 
@@ -39,6 +42,5 @@ class GetEventRecommendationsRequest(BaseModel):
 class GetEventRecommendationsResponse(BaseModel):
     """Response payload containing recommended events."""
 
-    # events: list[Event] = Field(default_factory=list, description="Recommended events")
-    events: str = Field(..., description="Recommended events")
+    events: EventList = Field(default_factory=list, description="Recommended events")
 
