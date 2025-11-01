@@ -17,11 +17,26 @@ export async function fetchEventRecommendations(
   options?: RequestInit,
 ): Promise<GetEventRecommendationsResponse> {
   if (MOCK_ENABLED) {
-    return {
-      events: getMockEvents(request.number_events).map(normalizeEvent),
-    };
+    try {
+      return await requestEventRecommendations(request, options);
+    } catch (error) {
+      console.warn(
+        "Falling back to local mock events after API mock request failed.",
+        error,
+      );
+      return {
+        events: getMockEvents(request.number_events).map(normalizeEvent),
+      };
+    }
   }
 
+  return requestEventRecommendations(request, options);
+}
+
+async function requestEventRecommendations(
+  request: GetEventRecommendationsRequest,
+  options?: RequestInit,
+): Promise<GetEventRecommendationsResponse> {
   const response = await fetch(`${API_BASE_URL}${EVENT_RECOMMENDATIONS_PATH}`, {
     method: "POST",
     headers: {
