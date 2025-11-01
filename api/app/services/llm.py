@@ -1,17 +1,16 @@
 import os
 from typing import Any, List, Mapping
-
+from langchain.chat_models import init_chat_model
 from ..models import Event
 
 
 class LLM:
     """Service for interacting with LLMs via OpenRouter for event suggestions."""
     
-    def __init__(self):
+    def __init__(self, api_key: str):
         """Initialize the LLM service with OpenRouter configuration."""
-        # TODO: Set up OpenRouter API key from environment
-        # TODO: Initialize LangChain ChatOpenAI with OpenRouter endpoint
-        pass
+        self.api_key = api_key
+        self.model = init_chat_model("gpts-4.1")
     
     def generate_event_suggestions(
         self, 
@@ -33,6 +32,10 @@ class LLM:
         # TODO: Parse response and convert to Event objects
         # TODO: Add error handling and fallback??
         return self._get_fallback_events(number_events)
+    
+    def test_method(self):
+        response = self.model.invoke("Why do parrots talk?")
+        return response
     
     def _create_system_prompt(self) -> str:
         """Create the system prompt for ChatGPT."""
