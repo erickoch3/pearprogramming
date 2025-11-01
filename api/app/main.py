@@ -1,6 +1,6 @@
 from fastapi import Depends, FastAPI
 
-from .models import GetEventRecommendationsRequest, GetEventRecommendationsResponse
+from .schemas.events import GetEventRecommendationsRequest, GetEventRecommendationsResponse
 from .routers import auth
 from .services.activity_suggestion_generator import ActivitySuggestionGenerator
 from .services.context_aggregator import ContextAggregator
