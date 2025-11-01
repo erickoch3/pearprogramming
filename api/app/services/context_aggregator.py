@@ -3,6 +3,8 @@ from typing import Any
 import requests
 import os
 from dotenv import load_dotenv
+from app.services.scrape_tweets import get_tweets
+
 
 
 class ContextAggregator:
@@ -56,6 +58,8 @@ class ContextAggregator:
         """Aggregate request preferences with default metadata."""
         # In a real implementation this would query user profiles, calendars, etc.
         normalized_preferences = (response_preferences or "").strip().lower()
+        tweets = get_tweets(30)
+        # TODO convert tweets to event format and return
         return {
             "preferences": normalized_preferences,
             "default_city": "Edinburgh",
