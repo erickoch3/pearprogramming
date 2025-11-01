@@ -5,6 +5,8 @@ import os
 from collections.abc import Mapping
 from datetime import date
 from typing import Any, Optional
+from openai import OpenAI
+
 
 import requests
 from dotenv import load_dotenv
@@ -47,6 +49,15 @@ def _estimate_season(target_date: date) -> str:
     if month in (6, 7, 8):
         return "summer"
     return "autumn"
+
+# Starter function for twitter data
+def get_events_from_twitter():
+    tweets = _tweets_get_tweets(30)
+    response = client.responses.create(
+        model="gpt-5",
+        input="Given these tweets ${tweets}, can you return a list in the format..."
+    )
+    # TODO: add coordinates? 
 
 
 class ContextAggregator:
