@@ -40,7 +40,7 @@ api:
 		$(MAKE) install; \
 	fi
 	@echo "Starting FastAPI server..."
-	@$(PYTHON) -m uvicorn api.app.main:app --reload --host 0.0.0.0 --port 8000
+	@$(PYTHON) -m uvicorn api.app.main:app --reload --host 0.0.0.0 --port 8000 --log-level debug
 
 mockapi:
 	@if [ ! -d $(VENV) ]; then \

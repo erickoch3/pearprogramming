@@ -59,7 +59,8 @@ class ActivitySuggestionGenerator:
             ) from _llm_import_error
 
         assert LLM is not None  # mypy/time-of-check guard
-        context = TEST_CONTEXT  # self._context_aggregator.gather_context(response_preferences)
+        # context = TEST_CONTEXT  
+        context = self._context_aggregator.gather_context(response_preferences)
         # preferences = context["preferences"]
 
         ranked_events = LLM().generate_event_suggestions(
