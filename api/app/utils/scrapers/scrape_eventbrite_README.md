@@ -8,11 +8,33 @@ A Python script that scrapes Eventbrite's public website to fetch events by loca
 - `requests`
 - `beautifulsoup4`
 - `lxml`
+- `python-dateutil`
+- `pytz`
+- `python-dotenv`
 
 Install dependencies:
 ```bash
-pip install requests beautifulsoup4 lxml
+pip install requests beautifulsoup4 lxml python-dateutil pytz python-dotenv
 ```
+
+## Setup
+
+1. Get a Google Maps API Key:
+   - Go to https://console.cloud.google.com/
+   - Create a project or select an existing one
+   - Enable the Geocoding API
+   - Create credentials (API Key)
+   - Copy your API key
+
+2. Set the API key as an environment variable:
+   ```bash
+   export GOOGLE_MAPS_API_KEY=your_api_key_here
+   ```
+   
+   Or create a `.env` file in the `api` directory:
+   ```
+   GOOGLE_MAPS_API_KEY=your_api_key_here
+   ```
 
 ## Usage
 
@@ -39,6 +61,9 @@ python scrape_eventbrite.py [OPTIONS]
   
 - `--debug`
   - Enable debug mode (shows detailed diagnostic information)
+  
+- `--api-key`
+  - Google Maps API key (optional if `GOOGLE_MAPS_API_KEY` environment variable is set)
 
 ### Examples
 
@@ -59,17 +84,18 @@ python scrape_eventbrite.py --out my_events.json
 ## Output
 
 The script outputs a JSON file containing an array of event objects. Each event includes:
-- `id`: Event ID
-- `name`: Event name
-- `description`: Event description (usually empty on listing pages)
-- `start`: Start date/time
-- `url`: Event URL
-- `status`: Event status (typically "live")
-- `is_free`: Whether the event is free
-- `currency`: Currency code
-- `logo`: Event image/logo URL
-- `venue`: Venue information (name, address)
-- `source`: Always "eventbrite_web_scraper"
+- `location_name`: Venue address/name (string)
+- `activity_name`: Event name (string)
+- `latitude`: Latitude coordinate from Google Maps API (float)
+- `longitude`: Longitude coordinate from Google Maps API (float)
+- `time`: Event datetime in ISO 8601 format (string, in UK timezone)
+- `url`: Event URL (string, optional - only included if exists)
+- `description`: Event description (string, optional - only included if exists and non-empty)
+
+**Note:** Events are automatically skipped if:
+- The venue address is invalid or empty
+- Geocoding fails (address cannot be found on Google Maps)
+- No Google Maps API key is provided
 
 A preview of the first 5 events is also printed to stdout.
 
