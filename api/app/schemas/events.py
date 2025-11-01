@@ -1,10 +1,19 @@
-from typing import Optional, Tuple
+from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import List, Optional
+
+from pydantic import BaseModel, Field, field_validator
 
 class Location(BaseModel):
-    x: int = Field(..., description="x coord")
-    y: int = Field(..., description="y coord") 
+    x: float = Field(..., description="x coord")
+    y: float = Field(..., description="y coord")
+
+    def __eq__(self, other: object) -> bool:  # pragma: no cover - tiny helper
+        if isinstance(other, Location):
+            return self.x == other.x and self.y == other.y
+        if isinstance(other, (tuple, list)) and len(other) == 2:
+            return self.x == other[0] and self.y == other[1]
+        return NotImplemented
 
 class Event(BaseModel):
     """Represents a suggested activity."""
@@ -23,8 +32,16 @@ class Event(BaseModel):
         default=None, description="Optional URL for additional event information"
     )
 
+    @field_validator("location", mode="before")
+    @classmethod
+    def _coerce_location(cls, value: object) -> object:
+        """Allow passing bare xy tuples/lists for convenience."""
+        if isinstance(value, (tuple, list)) and len(value) == 2:
+            return {"x": value[0], "y": value[1]}
+        return value
+
 class EventList(BaseModel):
-    events: list[Event] = Field(..., description="List of events.")
+    events: List[Event] = Field(..., description="List of events.")
 
 class GetEventRecommendationsRequest(BaseModel):
     """Request payload for generating event recommendations."""
@@ -44,4 +61,4 @@ class GetEventRecommendationsRequest(BaseModel):
 class GetEventRecommendationsResponse(BaseModel):
     """Response payload containing recommended events."""
 
-    events: list[Event] = Field(default_factory=list, description="Recommended events")
+    events: List[Event] = Field(default_factory=list, description="Recommended events")

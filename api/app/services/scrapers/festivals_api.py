@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import os
 from datetime import date, datetime
-from typing import Any, Iterable, Mapping, Sequence, TypedDict
+from typing import Any, Iterable, List, Mapping, Optional, Sequence, TypedDict
 from urllib.parse import urlencode
 
 import requests
@@ -28,19 +28,19 @@ class FestivalEventsPayload(TypedDict):
     """Structured response for events retrieved for a specific date."""
 
     date: str
-    events: list[Event]
+    events: List[Event]
 
 
 def fetch_festival_events(
     event_date: date,
-    festival: str | None = None,
+    festival: Optional[str] = None,
     *,
-    modified_from: str | None = None,
-    limit: int | None = 50,
+    modified_from: Optional[str] = None,
+    limit: Optional[int] = 50,
 ) -> FestivalEventsPayload:
     """Fetch events scheduled on `event_date` and map them to Event objects."""
     api_key, secret_key = _get_credentials()
-    query_items: list[tuple[str, str]] = []
+    query_items: List[tuple[str, str]] = []
 
     if festival:
         query_items.append(("festival", festival))
@@ -67,7 +67,7 @@ def fetch_festival_events(
     if not isinstance(payload, list):
         raise FestivalsAPIError("Unexpected payload format from festivals API")
 
-    events: list[Event] = []
+    events: List[Event] = []
     for item in payload:
         if not isinstance(item, Mapping):
             continue
@@ -102,7 +102,7 @@ def _build_signed_path(
     return f"{path}{separator}signature={signature}"
 
 
-def _parse_datetime(value: str) -> datetime | None:
+def _parse_datetime(value: str) -> Optional[datetime]:
     candidates = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S%z")
     for fmt in candidates:
         try:
@@ -115,7 +115,7 @@ def _parse_datetime(value: str) -> datetime | None:
         return None
 
 
-def _map_event(item: Mapping[str, Any]) -> Event | None:
+def _map_event(item: Mapping[str, Any]) -> Optional[Event]:
     title = item.get("title")
     latitude = item.get("latitude")
     longitude = item.get("longitude")
@@ -156,7 +156,7 @@ def _derive_emoji(item: Mapping[str, Any]) -> Emoji:
 
 
 def _collect_tags(item: Mapping[str, Any]) -> Iterable[str]:
-    tags: list[str] = []
+    tags: List[str] = []
 
     genre_tags = item.get("genre_tags")
     if isinstance(genre_tags, str):
