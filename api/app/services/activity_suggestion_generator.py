@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
-from ..models import Event
+from ..schemas.events import Event
 from .context_aggregator import ContextAggregator
 
 
