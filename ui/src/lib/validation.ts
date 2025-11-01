@@ -19,6 +19,29 @@ function isValidCoordinate(lat: number, lng: number): boolean {
 /**
  * Validates a single event object has all required fields with valid types
  */
+type CoordinateObject = { x: number; y: number };
+
+function toCoordinatePair(location: unknown): [number, number] | null {
+  if (Array.isArray(location) && location.length === 2) {
+    const [lat, lng] = location;
+    return typeof lat === "number" && typeof lng === "number"
+      ? [lat, lng]
+      : null;
+  }
+
+  if (
+    location &&
+    typeof location === "object" &&
+    "x" in location &&
+    "y" in location
+  ) {
+    const { x, y } = location as CoordinateObject;
+    return typeof x === "number" && typeof y === "number" ? [x, y] : null;
+  }
+
+  return null;
+}
+
 function isValidEvent(event: unknown): event is Event {
   if (!event || typeof event !== "object") return false;
 
@@ -34,8 +57,9 @@ function isValidEvent(event: unknown): event is Event {
   if (e.event_score < 0 || e.event_score > 10) return false;
 
   // Validate location
-  if (!Array.isArray(e.location) || e.location.length !== 2) return false;
-  const [lat, lng] = e.location;
+  const coords = toCoordinatePair(e.location);
+  if (!coords) return false;
+  const [lat, lng] = coords;
   if (!isValidCoordinate(lat, lng)) return false;
 
   // Validate optional link field

@@ -6,7 +6,14 @@ from typing import List, Optional
 from ..schemas.events import Event
 from ..data.mock_events import get_mock_events
 from .context_aggregator import ContextAggregator
-from .llm import LLM
+
+try:
+    from .llm import LLM
+except Exception as exc:  # pragma: no cover - optional dependency for mock mode
+    LLM = None  # type: ignore[assignment]
+    _llm_import_error: Optional[Exception] = exc
+else:  # pragma: no cover - import success path exercised in integration flow
+    _llm_import_error = None
 
 TEST_CONTEXT = """
 At (12, -5), the Riverside Night Market 🌙 is buzzing; I’d give it an 8 because the street food stalls change weekly and there’s live acoustic sets drifting over the riverbank. If you need the vendor map, peek at https://riversidenightmarket.example.
@@ -31,8 +38,27 @@ class ActivitySuggestionGenerator:
 
     def generate_suggestions(
         self, number_events: int, response_preferences: Optional[str]
-    ) -> str:
+    ) -> List[Event]:
         """Produce event recommendations matching the caller's preferences."""
+        if self._mock_mode_enabled:
+            events = get_mock_events(number_events)
+            if response_preferences:
+                normalized = response_preferences.strip().lower()
+                filtered = [
+                    event
+                    for event in events
+                    if normalized in event.name.lower()
+                    or normalized in event.description.lower()
+                ]
+                events = filtered or events
+            return events
+
+        if LLM is None:  # pragma: no cover - exercised when optional deps missing
+            raise RuntimeError(
+                "LLM backend is unavailable. Install the required dependencies or run the API with MOCK=1."
+            ) from _llm_import_error
+
+        assert LLM is not None  # mypy/time-of-check guard
         context = TEST_CONTEXT  # self._context_aggregator.gather_context(response_preferences)
         # preferences = context["preferences"]
 
@@ -41,6 +67,11 @@ class ActivitySuggestionGenerator:
 
     def _get_ranked_events(self, preferences: str) -> List[Event]:
         """Return a preference-aware ordered list of candidate events."""
+        if LLM is None:  # pragma: no cover - exercised when optional deps missing
+            raise RuntimeError(
+                "LLM backend is unavailable. Install the required dependencies or run the API with MOCK=1."
+            ) from _llm_import_error
+
         sample_events = LLM()._get_fallback_events()
 
         if not preferences:

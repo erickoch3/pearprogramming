@@ -54,9 +54,21 @@ async function requestEventRecommendations(
   };
 }
 
-function normalizeEvent(event: Event): Event {
+type LocationObject = { x: number; y: number };
+type RawLocation = Event["location"] | LocationObject;
+type RawEvent = Omit<Event, "location" | "link"> & {
+  location: RawLocation;
+  link?: string | null;
+};
+
+function normalizeEvent(event: RawEvent): Event {
+  const location = Array.isArray(event.location)
+    ? event.location
+    : [(event.location as LocationObject).x, (event.location as LocationObject).y];
+
   return {
     ...event,
+    location,
     link: event.link ?? undefined,
   };
 }
