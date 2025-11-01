@@ -38,6 +38,17 @@ class WeatherFetchError(RuntimeError):
     """Raised when the weather provider cannot return a usable payload."""
 
 
+def _estimate_season(target_date: date) -> str:
+    month = target_date.month
+    if month in (12, 1, 2):
+        return "winter"
+    if month in (3, 4, 5):
+        return "spring"
+    if month in (6, 7, 8):
+        return "summer"
+    return "autumn"
+
+
 class ContextAggregator:
     """Collects context data used to tailor event recommendations."""
 
