@@ -1,73 +1,170 @@
-from collections.abc import Mapping
-from typing import Any
-import requests
+from __future__ import annotations
+
+import logging
 import os
+from collections.abc import Mapping
+from datetime import date
+from typing import Any
+
+import requests
 from dotenv import load_dotenv
-from app.services.scrape_tweets import get_tweets
+
+logger = logging.getLogger(__name__)
+
+try:  # pragma: no cover - optional dependency may fail at import time
+    from ..utils.scrapers.scrape_eventbrite import (  # type: ignore[attr-defined]
+        get_events as _eventbrite_get_events,
+    )
+except Exception as exc:  # pragma: no cover
+    _eventbrite_get_events = None  # type: ignore[assignment]
+    logger.debug("Eventbrite scraper import failed: %s", exc)
+
+try:  # pragma: no cover - optional dependency may fail at import time
+    from ..utils.scrapers.scrape_tweets import (  # type: ignore[attr-defined]
+        get_tweets as _tweets_get_tweets,
+    )
+except Exception as exc:  # pragma: no cover
+    _tweets_get_tweets = None  # type: ignore[assignment]
+    logger.debug("Tweet scraper import failed: %s", exc)
+
+from .scrapers import (
+    FestivalEventsPayload,
+    FestivalsAPIError,
+    fetch_festival_events,
+)
 
 
-from app.utils.scrapers.scrape_eventbrite import get_events
+class WeatherFetchError(RuntimeError):
+    """Raised when the weather provider cannot return a usable payload."""
 
 
 class ContextAggregator:
     """Collects context data used to tailor event recommendations."""
-    
-    def get_todays_weather_forcast(self, city, country_code):
+
+    def get_todays_weather_forecast(
+        self,
+        city: str,
+        country_code: str,
+        target_date: date,
+    ) -> Mapping[str, Any]:
+        """Return current weather conditions for the given city."""
         load_dotenv()
         api_key = os.getenv("OPENWEATHERMAP_API_KEY")
+        if not api_key:
+            raise WeatherFetchError("OPENWEATHERMAP_API_KEY is not configured.")
 
-        # First API call - Get coordinates
-        coord_response = requests.get(
-            "http://api.openweathermap.org/geo/1.0/direct",
-            params={
-                "q": f"{city},{country_code}",
-                "limit": 1,
-                "appid": api_key
-            }
-        )
+        try:
+            coord_response = requests.get(
+                "https://api.openweathermap.org/geo/1.0/direct",
+                params={"q": f"{city},{country_code}", "limit": 1, "appid": api_key},
+                timeout=10,
+            )
+            coord_response.raise_for_status()
+        except requests.RequestException as exc:
+            raise WeatherFetchError(
+                f"Failed to geocode location '{city},{country_code}': {exc}"
+            ) from exc
 
         coord_data = coord_response.json()
-        if coord_data and len(coord_data) > 0:
-            lat = coord_data[0]['lat']
-            lon = coord_data[0]['lon']
+        if not (isinstance(coord_data, list) and coord_data):
+            raise WeatherFetchError(
+                f"No coordinates returned for '{city},{country_code}'."
+            )
 
-            # Second API call - Get weather forecast
+        first = coord_data[0]
+        lat = first.get("lat")
+        lon = first.get("lon")
+        if lat is None or lon is None:
+            raise WeatherFetchError(
+                f"Incomplete coordinates returned for '{city},{country_code}'."
+            )
+
+        try:
             weather_response = requests.get(
-                "https://api.openweathermap.org/data/2.5/weather?",
+                "https://api.openweathermap.org/data/2.5/weather",
                 params={
                     "lat": lat,
                     "lon": lon,
-                    "exclude": "minutely,hourly",
                     "units": "metric",
-                    "appid": api_key
-                }
+                    "appid": api_key,
+                },
+                timeout=10,
             )
-            weather_response_json = weather_response.json()
-            
-            return {
-                "temperature": weather_response_json["main"]["temp"],
-                "feels_like": weather_response_json["main"]["feels_like"],
-                "humidity": weather_response_json["main"]["humidity"],
-                "wind_speed": weather_response_json["wind"]["speed"],
-                "percent_cloudiness": weather_response_json["clouds"]["all"],
-                "rain_mm_per_h": weather_response_json.get("rain"),
-                "snow_mm_per_h": weather_response_json.get("snow")
-            }
+            weather_response.raise_for_status()
+        except requests.RequestException as exc:
+            raise WeatherFetchError(
+                f"Failed to fetch weather for coordinates ({lat}, {lon}): {exc}"
+            ) from exc
 
-        return None
+        weather_response_json = weather_response.json()
+        if weather_response_json.get("cod") not in (200, "200", None):
+            message = weather_response_json.get(
+                "message", "Unknown error from weather API"
+            )
+            raise WeatherFetchError(
+                f"Weather API error for ({lat}, {lon}): {message}"
+            )
 
-    def gather_context(self, response_preferences: str | None) -> Mapping[str, Any]:
-        """Aggregate request preferences with default metadata."""
-        # In a real implementation this would query user profiles, calendars, etc.
-        normalized_preferences = (response_preferences or "").strip().lower()
-        tweets = get_tweets(30)
-        # TODO convert tweets to event format and return
-        events_list  = get_events("Edinburgh, United Kingdom", today_only=True) # return a list of events which are basically dictionaries with the following keys: location_name, activity_name, latitude, longitude, time
+        target_iso = target_date.isoformat()
         return {
-            "preferences": normalized_preferences,
-            "default_city": "Edinburgh",
-            "season": "spring",
-            "events": events_list,
-            "weather": self.get_todays_weather_forcast(),
+            "date": target_iso,
+            "temperature": weather_response_json.get("main", {}).get("temp"),
+            "feels_like": weather_response_json.get("main", {}).get("feels_like"),
+            "humidity": weather_response_json.get("main", {}).get("humidity"),
+            "wind_speed": weather_response_json.get("wind", {}).get("speed"),
+            "percent_cloudiness": weather_response_json.get("clouds", {}).get("all"),
+            "rain_mm_per_h": weather_response_json.get("rain"),
+            "snow_mm_per_h": weather_response_json.get("snow"),
         }
 
+    def gather_context(
+        self,
+        response_preferences: str | None,
+        *,
+        target_date: date | None = None,
+        default_city: str = "Edinburgh",
+        default_country_code: str = "GB",
+        festival: str | None = None,
+        festival_limit: int | None = 25,
+    ) -> Mapping[str, Any]:
+        """Aggregate request preferences, weather, and festival events."""
+        normalized_preferences = (response_preferences or "").strip().lower()
+        resolved_date = target_date or date.today()
+
+        weather_payload: Mapping[str, Any] | None
+        weather_error: str | None = None
+        try:
+            weather_payload = self.get_todays_weather_forecast(
+                default_city, default_country_code, resolved_date
+            )
+        except WeatherFetchError as exc:
+            logger.warning("Weather fetch failed: %s", exc)
+            weather_payload = None
+            weather_error = str(exc)
+
+        festival_events: FestivalEventsPayload = {
+            "date": resolved_date.isoformat(),
+            "events": [],
+        }
+        festival_identifier = (
+            festival
+            if festival is not None
+            else os.getenv("EDINBURGH_FESTIVALS_DEFAULT_FESTIVAL") or None
+        )
+        try:
+            festival_events = fetch_festival_events(
+                resolved_date,
+                festival=festival_identifier,
+                limit=festival_limit,
+            )
+        except FestivalsAPIError as exc:
+            logger.warning("Festival fetch failed: %s", exc)
+
+        return {
+            "date": resolved_date.isoformat(),
+            "preferences": normalized_preferences,
+            "city": default_city,
+            "weather": weather_payload,
+            "weather_error": weather_error,
+            "festival_events": festival_events,
+        }
