@@ -1,14 +1,17 @@
 import type {
+  Coordinates,
   Event,
   GetEventRecommendationsRequest,
   GetEventRecommendationsResponse,
 } from "@/types/events";
+import type { TweetList } from "@/types/tweets";
 import { validateEventRecommendationsResponse } from "@/lib/validation";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
 
 const EVENT_RECOMMENDATIONS_PATH = "/events/recommendations";
+const TWEETS_PATH = "/tweets";
 const MOCK_ENABLED =
   process.env.NEXT_PUBLIC_MOCK === "1" || process.env.MOCK === "1";
 
@@ -61,10 +64,35 @@ type RawEvent = Omit<Event, "location" | "link"> & {
   link?: string | null;
 };
 
+function isCoordinateArray(value: unknown): value is Coordinates {
+  return (
+    Array.isArray(value) &&
+    value.length === 2 &&
+    value.every((coordinate) => typeof coordinate === "number" && Number.isFinite(coordinate))
+  );
+}
+
+function isLocationObject(value: unknown): value is LocationObject {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "x" in value &&
+    "y" in value &&
+    typeof (value as Record<string, unknown>).x === "number" &&
+    typeof (value as Record<string, unknown>).y === "number"
+  );
+}
+
 function normalizeEvent(event: RawEvent): Event {
-  const location = Array.isArray(event.location)
-    ? event.location
-    : [(event.location as LocationObject).x, (event.location as LocationObject).y];
+  let location: Coordinates;
+
+  if (isCoordinateArray(event.location)) {
+    location = event.location;
+  } else if (isLocationObject(event.location)) {
+    location = [event.location.x, event.location.y];
+  } else {
+    throw new Error("Invalid location format received for event");
+  }
 
   return {
     ...event,
@@ -140,3 +168,41 @@ const MOCK_EVENTS: Event[] = [
     event_score: 8.6,
   },
 ];
+
+export async function fetchTweets(
+  limit: number = 10,
+  keywords?: string[],
+  eventTitle?: string,
+  options?: RequestInit,
+): Promise<TweetList> {
+  if (MOCK_ENABLED) {
+    // Return empty tweets in mock mode
+    return { tweets: [] };
+  }
+
+  const params = new URLSearchParams();
+  params.append("limit", limit.toString());
+  if (keywords && keywords.length > 0) {
+    params.append("keywords", keywords.join(","));
+  }
+  if (eventTitle) {
+    params.append("event_title", eventTitle);
+  }
+
+  const response = await fetch(`${API_BASE_URL}${TWEETS_PATH}?${params.toString()}`, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...options?.headers,
+    },
+    ...options,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch tweets: ${response.status} ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data as TweetList;
+}

@@ -18,7 +18,7 @@ class Location(BaseModel):
 class Event(BaseModel):
     """Represents a suggested activity."""
 
-    location: Location = Field(..., description="Cartesian location coordinates")
+    location: Location = Field(..., description="Location coordinates where x is latitude and y is longitude")
     name: str = Field(..., description="Human-readable name for the event")
     emoji: str = Field(..., description="Emoji summarizing the event vibe")
     event_score: float = Field(
