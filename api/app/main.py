@@ -1,10 +1,20 @@
+import asyncio
+import json
+import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import AsyncGenerator
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from .schemas.events import GetEventRecommendationsRequest, GetEventRecommendationsResponse
 from .routers import auth
 from .services.activity_suggestion_generator import ActivitySuggestionGenerator
 from .services.context_aggregator import ContextAggregator
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Pear Programming API", version="0.1.0")
 
@@ -53,3 +63,205 @@ async def get_event_recommendations(
         response_preferences=request.response_preferences,
     )
     return GetEventRecommendationsResponse(events=events)
+
+
+async def event_stream_generator(
+    request: GetEventRecommendationsRequest,
+    aggregator: ContextAggregator,
+    generator: ActivitySuggestionGenerator,
+) -> AsyncGenerator[str, None]:
+    """Generate Server-Sent Events for event recommendation progress."""
+
+    def send_event(event_type: str, data: dict) -> str:
+        """Format a Server-Sent Event."""
+        return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+    start_time = time.perf_counter()
+    logger.info(
+        "stream: request started",
+        extra={
+            "event": {
+                "number_events": request.number_events,
+                "response_preferences": request.response_preferences,
+            }
+        },
+    )
+
+    try:
+        # Send initial progress event
+        yield send_event("progress", {
+            "status": "started",
+            "message": "Starting event search...",
+            "progress": 0
+        })
+
+        # Stream context gathering with progress updates
+        gathered_context = None
+        context_start = time.perf_counter()
+        async for progress_event in aggregator.gather_context_streaming(
+            response_preferences=request.response_preferences
+        ):
+            log_payload = dict(progress_event)
+            # Capture the context from the final progress event (internal use only)
+            if "_context" in progress_event:
+                gathered_context = progress_event.pop("_context")  # Remove before sending to client
+                context_duration = time.perf_counter() - context_start
+                logger.info(
+                    "stream: context gathered",
+                    extra={
+                        "event": {
+                            "preferences": gathered_context.get("preferences"),
+                            "festival_events": len(gathered_context.get("festival_events", {}).get("events", [])),
+                            "eventbrite_events": len(gathered_context.get("eventbrite_events", [])),
+                            "duration_seconds": round(context_duration, 3),
+                        }
+                    },
+                )
+                log_payload.pop("_context", None)
+
+            logger.debug("stream: progress update", extra={"event": log_payload})
+
+            # Send progress update to client (without the internal context data)
+            yield send_event("progress", progress_event)
+            # Small delay to ensure events are properly sent
+            await asyncio.sleep(0.01)
+
+        # Generate suggestions with intermediate progress updates
+        yield send_event("progress", {
+            "status": "generating",
+            "message": "Analyzing your preferences...",
+            "progress": 90
+        })
+
+        # Run the generator in a thread pool with progress updates
+        loop = asyncio.get_running_loop()
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        llm_start = time.perf_counter()
+        future = executor.submit(
+            generator.generate_suggestions,
+            request.number_events,
+            request.response_preferences,
+            gathered_context,
+        )
+        logger.info(
+            "stream: LLM generation started",
+            extra={"event": {"number_events": request.number_events}},
+        )
+
+        # Send progress updates while waiting for LLM
+        progress_steps = [
+            (92, "Reviewing available events..."),
+            (94, "Matching preferences to events..."),
+            (96, "Ranking recommendations..."),
+            (98, "Finalizing suggestions..."),
+        ]
+
+        step_index = 0
+        while not future.done():
+            await asyncio.sleep(0.5)  # Check every 500ms
+
+            # Send next progress update
+            if step_index < len(progress_steps):
+                progress_value, progress_msg = progress_steps[step_index]
+                yield send_event("progress", {
+                    "status": "generating",
+                    "message": progress_msg,
+                    "progress": progress_value
+                })
+                logger.debug(
+                    "stream: LLM progress step",
+                    extra={"event": {"progress": progress_value, "message": progress_msg}},
+                )
+                step_index += 1
+
+            # Wait a bit between updates
+            if not future.done():
+                await asyncio.sleep(1.5)  # 2 seconds total between updates
+
+        # Get the result
+        events = future.result()
+        executor.shutdown(wait=False)
+        llm_duration = time.perf_counter() - llm_start
+        logger.info(
+            "stream: LLM generation completed",
+            extra={
+                "event": {
+                    "event_count": len(events),
+                    "duration_seconds": round(llm_duration, 3),
+                }
+            },
+        )
+
+        # Send final result - convert Location objects to [x, y] tuples for JSON serialization
+        serialized_events = []
+        serialization_start = time.perf_counter()
+        for event in events:
+            try:
+                # Serialize using pydantic (v2 uses model_dump, v1 uses dict)
+                if hasattr(event, 'model_dump'):
+                    event_dict = event.model_dump()
+                elif hasattr(event, 'dict'):
+                    event_dict = event.dict()
+                else:
+                    # Fallback for plain dicts
+                    event_dict = dict(event)
+
+                # Convert Location object to tuple format expected by frontend [x, y]
+                location = event_dict.get('location')
+                if isinstance(location, dict) and 'x' in location and 'y' in location:
+                    event_dict['location'] = [location['x'], location['y']]
+                elif hasattr(location, 'x') and hasattr(location, 'y'):
+                    event_dict['location'] = [location.x, location.y]
+
+                serialized_events.append(event_dict)
+            except Exception as e:
+                logger.error("Failed to serialize event", extra={"event": {"error": str(e)}})
+                raise
+        serialization_duration = time.perf_counter() - serialization_start
+        total_duration = time.perf_counter() - start_time
+        logger.info(
+            "stream: serialization completed",
+            extra={
+                "event": {
+                    "serialized_count": len(serialized_events),
+                    "serialization_seconds": round(serialization_duration, 3),
+                    "total_seconds": round(total_duration, 3),
+                }
+            },
+        )
+
+        yield send_event("complete", {
+            "status": "complete",
+            "message": "Recommendations ready!",
+            "progress": 100,
+            "events": serialized_events
+        })
+
+    except Exception as e:
+        logger.exception("Error in streaming recommendations")
+        yield send_event("error", {
+            "status": "error",
+            "message": f"Error generating recommendations: {str(e)}"
+        })
+
+
+@app.post(
+    "/events/recommendations/stream",
+    summary="Stream activity recommendations with progress updates",
+)
+async def stream_event_recommendations(
+    request: GetEventRecommendationsRequest,
+    aggregator: ContextAggregator = Depends(get_context_aggregator),
+    generator: ActivitySuggestionGenerator = Depends(get_activity_suggestion_generator),
+):
+    """Stream activity recommendations with real-time progress updates using Server-Sent Events."""
+    return StreamingResponse(
+        event_stream_generator(request, aggregator, generator),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable buffering for nginx
+        },
+    )
