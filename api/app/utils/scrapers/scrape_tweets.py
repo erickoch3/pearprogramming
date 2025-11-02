@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 """Scrape tweets from X API and store them in the database."""
 
+import argparse
+import json
+import logging
 import os
 import sys
-import argparse
-import requests
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pathlib import Path
+
+import requests
 from dotenv import load_dotenv
+from openai import OpenAI
 
 # Add parent directory to path to enable imports
 script_dir = Path(__file__).resolve().parent
 api_dir = script_dir.parent.parent.parent
 sys.path.insert(0, str(api_dir))
+logger = logging.getLogger(__name__)
 
 from app.core.database import SessionLocal, engine, Base
 from app.models.tweet import Tweet
@@ -30,14 +35,21 @@ def _require_api_key() -> str:
         raise ValueError("Please set the X_API_KEY environment variable.")
     return api_key
 
+def _require_openai_api_key() -> str:
+    """Return the configured OPENAI API key or raise a helpful error."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("Please set the OPENAI_API_KEY environment variable.")
+    return api_key
+
 # Keywords that tend to indicate real-world activities
 # Prioritized list kept under query length limit (512 chars)
 # Multi-word terms are stored without quotes - will be quoted in build_query()
 ACTIVITY_KEYWORDS = [
     "event", "festival", "concert", "show",
-    "comedy", "market", "food market", "brunch", "dinner",
-    "exhibition", "museum", "gallery", "workshop", "meetup",
-    "hike", "walk", "running",
+    "today", "market", "market", "restauraunt", 
+    "restauraunt", "museum", "gallery", "workshop", "meetup",
+    "hike", "walk",
     "park", "tour", "popup"
 ]
 
@@ -161,18 +173,18 @@ def write_tweets_to_db(limit=10):
     # Validate query length (X API v2 has a 512 character limit)
     query_length = len(query)
     if query_length > 512:
-        print(f"⚠️  Warning: Query length ({query_length} chars) exceeds X API limit (512 chars)")
-        print(f"Query preview: {query[:100]}...")
-        print("Attempting to send anyway, but may fail.\n")
+        logger.warning(f"Query length ({query_length} chars) exceeds X API limit (512 chars)")
+        logger.warning(f"Query preview: {query[:100]}...")
+        logger.warning("Attempting to send anyway, but may fail.")
     else:
-        print(f"✓ Query length: {query_length} characters (limit: 512)\n")
+        logger.info(f"Query length: {query_length} characters (limit: 512)")
 
     total = 0
     stored = 0
     next_token = None
     seen = set()
 
-    print(f"🔍 Searching for up to {limit} tweets about activities in Edinburgh...\n")
+    logger.info(f"Searching for up to {limit} tweets about activities in Edinburgh...")
 
     # Create database session
     db = SessionLocal()
@@ -215,7 +227,7 @@ def write_tweets_to_db(limit=10):
                 db.add(tweet)
                 stored += 1
 
-                print(f"@{username}: {text}\n→ {url}\n")
+                logger.debug(f"@{username}: {text} → {url}")
                 total += 1
 
                 if total >= limit:
@@ -228,11 +240,11 @@ def write_tweets_to_db(limit=10):
             if not next_token:
                 break
 
-        print(f"Done — fetched {total} tweets, stored {stored} in database.\n")
+        logger.info(f"Done — fetched {total} tweets, stored {stored} in database.")
 
     except Exception as e:
         db.rollback()
-        print(f"Error: {e}")
+        logger.error(f"Error: {e}")
         raise
     finally:
         db.close()
@@ -269,7 +281,7 @@ def get_tweets(limit=10, threshold_hours_for_refresh=2):
     needs_refresh = False
 
     if last_scrape is None:
-        print("No tweets in database. Fetching new tweets...")
+        logger.info("No tweets in database. Fetching new tweets...")
         needs_refresh = True
     else:
         # Calculate time since last scrape
@@ -281,7 +293,7 @@ def get_tweets(limit=10, threshold_hours_for_refresh=2):
         hours_since_scrape = time_since_scrape.total_seconds() / 3600
 
         if hours_since_scrape > threshold_hours_for_refresh:
-            print(f"Last scrape was {hours_since_scrape:.1f} hours ago (threshold: {threshold_hours_for_refresh} hours). Fetching new tweets...")
+            logger.info(f"Last scrape was {hours_since_scrape:.1f} hours ago (threshold: {threshold_hours_for_refresh} hours). Fetching new tweets...")
             needs_refresh = True
 
     # Refresh data if needed
@@ -290,7 +302,7 @@ def get_tweets(limit=10, threshold_hours_for_refresh=2):
             write_tweets_to_db(limit)
         except ValueError as e:
             # API key not configured, return empty list
-            print(f"Cannot fetch tweets: {e}")
+            logger.warning(f"Cannot fetch tweets: {e}")
             return []
 
     # Fetch and return tweets from database
@@ -300,6 +312,103 @@ def get_tweets(limit=10, threshold_hours_for_refresh=2):
         return tweets
     finally:
         db.close()
+
+def get_events(limit=30, threshold_hours_for_refresh=2):
+    """
+    Convert tweets to structured event data using OpenAI API.
+
+    Args:
+        limit: Number of tweets to process (default: 10)
+        threshold_hours_for_refresh: Number of hours before data is considered stale (default: 2)
+
+    Returns:
+        List of event dictionaries with location_name, activity_name, time, and url fields
+    """
+    try:
+        # Get tweets from database
+        tweets = get_tweets(limit, threshold_hours_for_refresh)
+    
+        if not tweets:
+            logger.debug("No tweets retrieved")
+            return []
+
+        # Get OpenAI API key
+        openai_api_key = _require_openai_api_key()
+
+        # Initialize OpenAI client
+        client = OpenAI(api_key=openai_api_key)
+
+        # Get today's date for filtering
+        today = date.today().isoformat()
+
+        # Convert tweets to JSON dictionaries
+        tweets_json = [
+            {
+                "text": tweet.text,
+                "like_count": tweet.like_count,
+                "retweet_count": tweet.retweet_count,
+                "created_at": tweet.created_at.isoformat() if tweet.created_at else None,
+                "scraped_at": tweet.scraped_at.isoformat() if tweet.scraped_at else None,
+            }
+            for tweet in tweets
+        ]
+
+        # Format tweets as JSON string for the prompt
+        tweets_json_str = json.dumps(tweets_json, indent=2)
+
+        # Create prompt for OpenAI
+        prompt = f"""Given the following tweets (in JSON format), extract any events mentioned that are happening TODAY ({today}).
+
+For each event, return a JSON object with these fields:
+- location_name: The venue or location name (optional)
+- activity_name: The event name/title (optional)
+- time: (optional) The event time in ISO 8601 format (YYYY-MM-DDTHH:MM:SS+00:00). If the time is not available in the tweet, omit this field or set it to null.
+- url: The event URL if available, otherwise null
+
+If the event includes a date, make sure that it's for today's date ({today}). If the tweet does not include a date and is an activity that could be done any day (such as a bar or restauraunt), include it and set the time field to null. 
+Exclude any events that explicitely include a date that is not today's date ({today}).
+Return ONLY a JSON array of event objects, with no additional text or formatting.
+If any of these are missing just return the information you can find
+
+Tweets:
+{tweets_json_str}"""
+
+        # Call OpenAI API
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that extracts structured event data from tweets. Return only valid JSON arrays."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            response_format={"type": "json_object"}
+        )
+
+        # Parse the response
+        content = response.choices[0].message.content
+        if not content:
+            logger.debug("Empty response from OpenAI")
+            return []
+
+        # The response_format ensures we get JSON, but it might be wrapped
+        parsed = json.loads(content)
+
+        # Handle different response formats
+        if isinstance(parsed, list):
+            events = parsed
+        elif isinstance(parsed, dict) and "events" in parsed:
+            events = parsed["events"]
+        else:
+            logger.debug(f"Unexpected response format from OpenAI: {parsed}")
+            return []
+
+        logger.debug(f"Extracted {len(events)} events from tweets")
+        return events
+
+    except Exception as exc:
+        logger.debug(f"Failed to extract events from tweets: {exc}")
+        return [] 
+
 
 
 def main():
