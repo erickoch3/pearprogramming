@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import  Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -61,4 +61,4 @@ class GetEventRecommendationsRequest(BaseModel):
 class GetEventRecommendationsResponse(BaseModel):
     """Response payload containing recommended events."""
 
-    events: List[Event] = Field(default_factory=list, description="Recommended events")
+    events: list[Event] = Field(default_factory=list, description="Recommended events")
