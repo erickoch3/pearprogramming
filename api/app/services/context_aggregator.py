@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Mapping
 from datetime import date
 from typing import Any, Optional
 
 import requests
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, Future
 from dotenv import load_dotenv
 from requests import Session
 
@@ -274,3 +275,158 @@ class ContextAggregator:
             _FESTIVAL_CACHE[cache_key] = (now, events)
 
         return events
+
+    async def gather_context_streaming(
+        self,
+        response_preferences: Optional[str],
+        *,
+        target_date: Optional[date] = None,
+        default_city: str = "Edinburgh",
+        default_country_code: str = "GB",
+        festival: Optional[str] = None,
+        festival_limit: Optional[int] = 25,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Aggregate context with streaming progress updates."""
+        raw_preferences = (response_preferences or "").strip()
+        normalized_preferences = raw_preferences.lower()
+        preference_keywords = self._extract_preference_keywords(raw_preferences)
+        resolved_date = target_date or date.today()
+
+        festival_identifier = (
+            festival
+            if festival is not None
+            else os.getenv("EDINBURGH_FESTIVALS_DEFAULT_FESTIVAL") or None
+        )
+
+        if _eventbrite_get_events is None:
+            raise RuntimeError(
+                "Eventbrite scraper is unavailable. Install and configure the scraper dependency."
+            )
+
+        # Track completion state
+        completed_tasks = {"weather": False, "festivals": False, "eventbrite": False}
+        total_tasks = 3
+
+        def calculate_progress() -> int:
+            """Calculate progress percentage based on completed tasks."""
+            completed = sum(1 for done in completed_tasks.values() if done)
+            # Reserve 0-10% for start, 10-60% for data gathering, 60-100% for LLM
+            return 10 + int((completed / total_tasks) * 50)
+
+        # Submit all tasks to thread pool
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            weather_future = executor.submit(
+                self.get_todays_weather_forecast,
+                default_city,
+                default_country_code,
+                resolved_date,
+            )
+            festival_future = executor.submit(
+                self._get_festival_events_cached,
+                resolved_date,
+                festival_identifier,
+                festival_limit,
+            )
+            eventbrite_future = executor.submit(
+                _eventbrite_get_events,
+                default_city,
+                today_only=(resolved_date == date.today()),
+            )
+
+            # Monitor futures for completion
+            futures = {
+                "weather": weather_future,
+                "festivals": festival_future,
+                "eventbrite": eventbrite_future,
+            }
+
+            # Yield progress as tasks complete
+            yield {
+                "status": "fetching_weather",
+                "message": "Checking weather conditions...",
+                "progress": calculate_progress(),
+            }
+
+            while not all(completed_tasks.values()):
+                await asyncio.sleep(0.1)  # Poll every 100ms
+
+                for task_name, future in futures.items():
+                    if not completed_tasks[task_name] and future.done():
+                        completed_tasks[task_name] = True
+
+                        # Yield progress update
+                        if task_name == "weather":
+                            yield {
+                                "status": "weather_complete",
+                                "message": "Weather data retrieved",
+                                "progress": calculate_progress(),
+                            }
+                        elif task_name == "festivals":
+                            yield {
+                                "status": "festivals_complete",
+                                "message": "Festival events retrieved",
+                                "progress": calculate_progress(),
+                            }
+                        elif task_name == "eventbrite":
+                            yield {
+                                "status": "eventbrite_complete",
+                                "message": "Eventbrite events retrieved",
+                                "progress": calculate_progress(),
+                            }
+
+            # All tasks complete - gather results
+            weather_payload: Optional[Mapping[str, Any]] = None
+            weather_error: Optional[str] = None
+            festival_events: FestivalEventsPayload = {
+                "date": resolved_date.isoformat(),
+                "events": [],
+            }
+            eventbrite_events: list[Any] = []
+            eventbrite_error: Optional[str] = None
+
+            # Collect results
+            try:
+                weather_payload = weather_future.result()
+            except WeatherFetchError as exc:
+                logger.warning("Weather fetch failed: %s", exc)
+                weather_error = str(exc)
+            except Exception as exc:
+                logger.warning("Unexpected weather fetch failure: %s", exc)
+                weather_error = str(exc)
+
+            try:
+                festival_events = festival_future.result()
+            except FestivalsAPIError as exc:
+                logger.warning("Festival fetch failed: %s", exc)
+            except Exception as exc:
+                logger.warning("Unexpected festival fetch failure: %s", exc)
+
+            try:
+                eventbrite_events = eventbrite_future.result()
+            except Exception as exc:
+                logger.warning("Eventbrite fetch failed: %s", exc)
+                eventbrite_error = str(exc)
+
+            # Build the context for internal use
+            context_data = {
+                "date": resolved_date.isoformat(),
+                "preferences": normalized_preferences,
+                "preferences_raw": raw_preferences,
+                "preferences_normalized": normalized_preferences,
+                "preference_keywords": preference_keywords,
+                "has_preferences": bool(raw_preferences),
+                "city": default_city,
+                "weather": weather_payload,
+                "weather_error": weather_error,
+                "festival_events": festival_events,
+                "eventbrite_events": eventbrite_events,
+                "eventbrite_error": eventbrite_error,
+            }
+
+            # Final progress update - send only progress info to client, not the context
+            yield {
+                "status": "context_complete",
+                "message": "All data sources retrieved",
+                "progress": 60,
+                "_context": context_data,  # Internal use only, prefixed with _ to indicate it's not for serialization
+            }

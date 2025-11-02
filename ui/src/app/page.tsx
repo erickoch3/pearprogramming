@@ -7,7 +7,7 @@ import { EventDetailsModal } from "@/components/EventDetailsModal";
 import { EventListSection } from "@/components/EventListSection";
 import { MapSection } from "@/components/MapSection";
 import { SettingsButton } from "@/components/SettingsButton";
-import { useEventRecommendations } from "@/hooks/useEventRecommendations";
+import { useStreamingEventRecommendations } from "@/hooks/useStreamingEventRecommendations";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import type { Event } from "@/types/events";
 
@@ -23,7 +23,7 @@ export default function HomePage() {
     [activityPreferences],
   );
 
-  const { events, loading, error } = useEventRecommendations(eventRequest);
+  const { events, loading, error, progress } = useStreamingEventRecommendations(eventRequest);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
 
   const handleSelectEvent = (event: Event) => {
@@ -47,6 +47,7 @@ export default function HomePage() {
             events={events}
             loading={loading}
             error={error}
+            progress={progress}
             onSelectEvent={handleSelectEvent}
           />
         </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useUserSettings } from "@/hooks/useUserSettings";
 
 const TYPING_SPEED_MS = 80;
 const FALLBACK_SENTENCE = "Make Today Remarkable";
@@ -16,6 +17,7 @@ type InspirationMetadata = {
 };
 
 export function AppHeader() {
+  const { activityPreferences } = useUserSettings();
   const [targetText, setTargetText] = useState("");
   const [displayedText, setDisplayedText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -66,7 +68,12 @@ export function AppHeader() {
 
     void (async () => {
       try {
-        const response = await fetch("/api/inspiration", {
+        const url = new URL("/api/inspiration", window.location.origin);
+        if (activityPreferences) {
+          url.searchParams.set("preferences", activityPreferences);
+        }
+
+        const response = await fetch(url, {
           method: "GET",
           cache: "no-store",
           signal: controller.signal,
@@ -106,7 +113,7 @@ export function AppHeader() {
         controller.abort();
       }
     };
-  }, []);
+  }, [activityPreferences]);
 
   useEffect(() => {
     if (!targetText) {
