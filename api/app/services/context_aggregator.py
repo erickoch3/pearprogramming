@@ -121,11 +121,13 @@ class ContextAggregator:
             if festival is not None
             else os.getenv("EDINBURGH_FESTIVALS_DEFAULT_FESTIVAL") or None
         )
-        # Optionally include Eventbrite-scraped events when the optional scraper
-        # dependency is available and credentials are configured.
+        # Always include Eventbrite-scraped events; require scraper to be available.
         eventbrite_events: list[Any] = []
         eventbrite_error: Optional[str] = None
-        enable_eventbrite = os.getenv("ENABLE_EVENTBRITE_SCRAPER") == "1"
+        if _eventbrite_get_events is None:
+            raise RuntimeError(
+                "Eventbrite scraper is unavailable. Install and configure the scraper dependency."
+            )
 
         weather_future = None
         festival_future = None
@@ -144,18 +146,13 @@ class ContextAggregator:
                 festival_identifier,
                 festival_limit,
             )
-            if enable_eventbrite and _eventbrite_get_events is not None:
-                location = default_city
-                today_only = resolved_date == date.today()
-                eventbrite_future = executor.submit(
-                    _eventbrite_get_events,
-                    location,
-                    today_only=today_only,
-                )
-            elif _eventbrite_get_events is None:
-                logger.debug(
-                    "Eventbrite scraper not available; skipping Eventbrite events"
-                )
+            location = default_city
+            today_only = resolved_date == date.today()
+            eventbrite_future = executor.submit(
+                _eventbrite_get_events,
+                location,
+                today_only=today_only,
+            )
 
         if weather_future is not None:
             try:

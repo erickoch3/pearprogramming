@@ -40,6 +40,10 @@ def test_get_todays_weather_forecast(monkeypatch):
 
     monkeypatch.setenv("OPENWEATHERMAP_API_KEY", "fake-key")
     _clear_caches()
+    monkeypatch.setattr(
+        "api.app.services.context_aggregator._eventbrite_get_events",
+        lambda *_args, **_kwargs: [],
+    )
 
     def fake_get(url, params, **kwargs):
         assert params["q"] == "Edinburgh,GB"
@@ -92,6 +96,10 @@ def test_gather_context_includes_defaults(monkeypatch):
     monkeypatch.setattr(
         "api.app.services.context_aggregator.fetch_festival_events",
         lambda target_date, **kwargs: {"date": target_date.isoformat(), "events": []},
+    )
+    monkeypatch.setattr(
+        "api.app.services.context_aggregator._eventbrite_get_events",
+        lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
         "api.app.services.context_aggregator._FESTIVAL_CACHE", {}
