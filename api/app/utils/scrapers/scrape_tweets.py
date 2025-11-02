@@ -12,15 +12,14 @@ from dotenv import load_dotenv
 
 # Add parent directory to path to enable imports
 script_dir = Path(__file__).resolve().parent
-api_dir = script_dir.parent.parent
+api_dir = script_dir.parent.parent.parent
 sys.path.insert(0, str(api_dir))
 
 from app.core.database import SessionLocal, engine, Base
 from app.models.tweet import Tweet
 
 # Load .env file from the root directory
-env_path = api_dir.parent / ".env"
-load_dotenv(dotenv_path=env_path)
+load_dotenv()
 
 API_URL = "https://api.x.com/2/tweets/search/recent"
 
@@ -287,7 +286,12 @@ def get_tweets(limit=10, threshold_hours_for_refresh=2):
 
     # Refresh data if needed
     if needs_refresh:
-        write_tweets_to_db(limit)
+        try:
+            write_tweets_to_db(limit)
+        except ValueError as e:
+            # API key not configured, return empty list
+            print(f"Cannot fetch tweets: {e}")
+            return []
 
     # Fetch and return tweets from database
     db = SessionLocal()

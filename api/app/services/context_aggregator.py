@@ -5,8 +5,6 @@ import os
 from collections.abc import Mapping
 from datetime import date
 from typing import Any, Optional
-from openai import OpenAI
-
 
 import requests
 from dotenv import load_dotenv
@@ -49,15 +47,6 @@ def _estimate_season(target_date: date) -> str:
     if month in (6, 7, 8):
         return "summer"
     return "autumn"
-
-# Starter function for twitter data
-def get_events_from_twitter():
-    tweets = _tweets_get_tweets(30)
-    response = client.responses.create(
-        model="gpt-5",
-        input="Given these tweets ${tweets}, can you return a list in the format..."
-    )
-    # TODO: add coordinates? 
 
 
 class ContextAggregator:
@@ -205,6 +194,19 @@ class ContextAggregator:
         else:
             logger.debug("Eventbrite scraper not available; skipping Eventbrite events")
 
+        # Optionally include tweets when the optional scraper
+        # dependency is available and credentials are configured.
+        tweets: list[Any] = []
+        tweets_error: Optional[str] = None
+        if _tweets_get_tweets is not None:
+            try:
+                tweets = _tweets_get_tweets()
+            except Exception as exc:  # pragma: no cover - network/env dependent
+                logger.warning("Tweet fetch failed: %s", exc)
+                tweets_error = str(exc)
+        else:
+            logger.debug("Tweet scraper not available; skipping tweets")
+
         return {
             "date": resolved_date.isoformat(),
             "preferences": normalized_preferences,
@@ -214,4 +216,6 @@ class ContextAggregator:
             "festival_events": festival_events,
             "eventbrite_events": eventbrite_events,
             "eventbrite_error": eventbrite_error,
+            "tweets": tweets,
+            "tweets_error": tweets_error,
         }
