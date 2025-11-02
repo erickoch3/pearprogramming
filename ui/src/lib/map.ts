@@ -1,11 +1,14 @@
 import type { Coordinates } from "@/types/events";
 
 export const EDINBURGH_CENTER: [number, number] = [55.9533, -3.1883];
-const DEGREE_SCALE = 0.01;
 
+/**
+ * Convert coordinates to [latitude, longitude] format.
+ * The coordinates are already latitude and longitude values,
+ * so this function simply returns them in the correct order.
+ */
 export function toLatLng([x, y]: Coordinates): [number, number] {
-  const lat = EDINBURGH_CENTER[0] + y * DEGREE_SCALE;
-  const lng = EDINBURGH_CENTER[1] + x * DEGREE_SCALE;
-  return [lat, lng];
+  // x is latitude, y is longitude - return as [lat, lng] for Leaflet
+  return [x, y];
 }
 

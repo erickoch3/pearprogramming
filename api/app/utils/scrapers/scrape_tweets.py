@@ -2,24 +2,32 @@
 """Scrape tweets from X API and store them in the database."""
 
 import os
+import re
 import sys
 import argparse
 import requests
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable, List, Optional
+
 from dotenv import load_dotenv
 
-# Add parent directory to path to enable imports
 script_dir = Path(__file__).resolve().parent
-api_dir = script_dir.parent.parent
-sys.path.insert(0, str(api_dir))
+app_dir = script_dir.parent.parent
 
-from app.core.database import SessionLocal, engine, Base
-from app.models.tweet import Tweet
+try:  # Preferred path when imported as part of the app package
+    from ...core.database import SessionLocal, engine, Base
+    from ...models.tweet import Tweet
+except ImportError:  # Fallback for running as a standalone script
+    sys.path.insert(0, str(app_dir))
+    from app.core.database import SessionLocal, engine, Base
+    from app.models.tweet import Tweet
+
+from sqlalchemy import or_
 
 # Load .env file from the root directory
-env_path = api_dir.parent / ".env"
+env_path = app_dir.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 API_URL = "https://api.x.com/2/tweets/search/recent"
@@ -51,26 +59,100 @@ LOCATION_TERMS = [
 ]
 
 
-def build_query():
+def _sanitize_term(term: str) -> str:
+    return re.sub(r"\s+", " ", term.strip())
+
+
+def _quote_term(term: str) -> str:
+    sanitized = _sanitize_term(term)
+    if not sanitized:
+        return ""
+    sanitized = sanitized.replace('"', '\\"')
+    if " " in sanitized:
+        return f'"{sanitized}"'
+    return sanitized
+
+
+def _compose_query_from_terms(keyword_terms: Iterable[str], location_terms: Iterable[str]) -> str:
+    kw_list = [term for term in keyword_terms if term]
+    loc_list = [term for term in location_terms if term]
+    kw_clause = f"({' OR '.join(kw_list)})" if kw_list else ""
+    loc_clause = f"({' OR '.join(loc_list)})" if loc_list else ""
+    parts = [kw_clause, loc_clause, "-is:retweet", "lang:en"]
+    return " ".join(part for part in parts if part).strip()
+
+
+def _trim_terms_to_limit(keyword_terms: List[str], location_terms: List[str]) -> List[str]:
+    trimmed: List[str] = []
+    for term in keyword_terms:
+        candidate = trimmed + [term]
+        query = _compose_query_from_terms(candidate, location_terms)
+        if len(query) <= 512:
+            trimmed.append(term)
+        else:
+            break
+    if not trimmed and keyword_terms:
+        trimmed = keyword_terms[:1]
+    return trimmed
+
+
+def build_query(activity_keywords=None, location_terms=None):
     """
     Build a properly formatted query for X API v2.
     Multi-word terms are quoted to ensure proper parsing.
+
+    Args:
+        activity_keywords: Optional list of activity keywords. If None, uses default ACTIVITY_KEYWORDS
+        location_terms: Optional list of location terms. If None, uses default LOCATION_TERMS
     """
-    def quote_term(term):
-        """Quote terms that contain spaces."""
-        if " " in term:
-            return f'"{term}"'
-        return term
 
-    kw_terms = [quote_term(kw) for kw in ACTIVITY_KEYWORDS]
-    loc_terms = [quote_term(loc) for loc in LOCATION_TERMS]
+    kw_list = activity_keywords if activity_keywords is not None else ACTIVITY_KEYWORDS
+    loc_list = location_terms if location_terms is not None else LOCATION_TERMS
 
-    kw = "(" + " OR ".join(kw_terms) + ")"
-    loc = "(" + " OR ".join(loc_terms) + ")"
-    # -is:retweet removes RTs, lang:en keeps it readable
-    # Note: place_country operator is not available in basic/free tier, so we rely on location keywords
-    query = f"{kw} {loc} -is:retweet lang:en"
-    return query
+    kw_terms = [_quote_term(kw) for kw in kw_list if kw]
+    loc_terms = [_quote_term(loc) for loc in loc_list if loc]
+
+    kw_terms = _trim_terms_to_limit(kw_terms, loc_terms)
+    return _compose_query_from_terms(kw_terms, loc_terms)
+
+
+def build_event_query(event_title: str, extra_keywords: Optional[Iterable[str]] = None, location_terms=None) -> str:
+    """Build a query that focuses on a specific event title."""
+
+    loc_list = location_terms if location_terms is not None else LOCATION_TERMS
+    loc_terms = [_quote_term(loc) for loc in loc_list if loc]
+
+    keyword_candidates: List[str] = []
+
+    if event_title:
+        title_clean = _sanitize_term(event_title)
+        if title_clean:
+            keyword_candidates.append(_quote_term(title_clean))
+
+            words = [w for w in re.split(r"[^\w#]+", title_clean) if len(w) > 2]
+            keyword_candidates.extend(_quote_term(w) for w in words[:5])
+
+            bigrams = [" ".join(words[i:i + 2]) for i in range(len(words) - 1)]
+            keyword_candidates.extend(_quote_term(bg) for bg in bigrams[:3])
+
+    if extra_keywords:
+        keyword_candidates.extend(_quote_term(term) for term in extra_keywords if term)
+
+    keyword_candidates.extend(_quote_term(term) for term in ACTIVITY_KEYWORDS[:5])
+
+    # De-duplicate while preserving order
+    seen = set()
+    ordered_terms: List[str] = []
+    for term in keyword_candidates:
+        if term and term not in seen:
+            seen.add(term)
+            ordered_terms.append(term)
+
+    if not ordered_terms:
+        ordered_terms = [_quote_term(event_title or "edinburgh events")]
+
+    ordered_terms = _trim_terms_to_limit(ordered_terms, loc_terms)
+    return _compose_query_from_terms(ordered_terms, loc_terms)
 
 
 def fetch_page(api_key, query, next_token=None, max_results=10):
@@ -151,13 +233,70 @@ def index_users(includes):
     return users
 
 
-def write_tweets_to_db(limit=10):
+def _format_tweet_record(tweet_data, users):
+    """Convert raw tweet payload into a serializable record."""
+    if not tweet_data:
+        return None
+
+    tweet_id = tweet_data.get("id")
+    if tweet_id is None:
+        return None
+
+    try:
+        record_id = int(tweet_id)
+    except (TypeError, ValueError):  # pragma: no cover - defensive fallback
+        record_id = abs(hash(tweet_id))
+
+    uid = tweet_data.get("author_id")
+    user = users.get(uid, {}) if users else {}
+    username = user.get("username", "unknown")
+
+    text = tweet_data.get("text", "") or ""
+    text = text.replace("\n", " ")
+
+    created_at = parse_tweet_datetime(tweet_data.get("created_at"))
+    metrics = tweet_data.get("public_metrics", {}) or {}
+    
+    # Generate tweet URL
+    url = None
+    if username and username != "unknown" and tweet_id:
+        url = f"https://x.com/{username}/status/{tweet_id}"
+
+    return {
+        "id": record_id,
+        "text": text,
+        "username": username,
+        "url": url,
+        "like_count": metrics.get("like_count", 0) or 0,
+        "retweet_count": metrics.get("retweet_count", 0) or 0,
+        "created_at": created_at,
+        "scraped_at": datetime.now(timezone.utc),
+        "is_synthetic": False,
+    }
+
+
+def _ensure_event_reference(payload: dict, event_title: Optional[str]) -> dict:
+    if not event_title:
+        return payload
+
+    title_clean = event_title.strip()
+    if not title_clean:
+        return payload
+
+    text_lower = payload["text"].lower() if payload["text"] else ""
+    if title_clean.lower() not in text_lower:
+        payload["text"] = f"{payload['text']} • Related to {title_clean}".strip()
+
+    return payload
+
+
+def write_tweets_to_db(limit=10, activity_keywords=None, location_terms=None):
 
     # Create database tables if they don't exist
     Base.metadata.create_all(bind=engine)
 
     api_key = _require_api_key()
-    query = build_query()
+    query = build_query(activity_keywords=activity_keywords, location_terms=location_terms)
 
     # Validate query length (X API v2 has a 512 character limit)
     query_length = len(query)
@@ -188,35 +327,33 @@ def write_tweets_to_db(limit=10):
             users = index_users(includes)
 
             for t in data.get("data", []):
-                if t["id"] in seen:
+                tweet_id = t.get("id")
+                if tweet_id in seen:
                     continue
-                seen.add(t["id"])
 
-                uid = t.get("author_id")
-                user = users.get(uid, {})
-                username = user.get("username", "unknown")
-                url = f"https://x.com/{username}/status/{t['id']}"
-                text = t.get("text", "").replace("\n", " ")
+                payload = _format_tweet_record(t, users)
+                if payload is None:
+                    continue
 
-                # Parse tweet data
-                created_at = parse_tweet_datetime(t.get("created_at"))
-                metrics = t.get("public_metrics", {})
-                like_count = metrics.get("like_count", 0)
-                retweet_count = metrics.get("retweet_count", 0)
+                seen.add(tweet_id)
 
-                # Create and store tweet in database
                 tweet = Tweet(
-                    text=text,
-                    like_count=like_count,
-                    retweet_count=retweet_count,
-                    created_at=created_at,
-                    scraped_at=datetime.now(timezone.utc)
+                    text=payload["text"],
+                    like_count=payload["like_count"],
+                    retweet_count=payload["retweet_count"],
+                    created_at=payload["created_at"],
+                    scraped_at=payload["scraped_at"],
+                    username=payload.get("username"),
+                    url=payload.get("url"),
+                    is_synthetic=payload.get("is_synthetic", False),
                 )
 
                 db.add(tweet)
                 stored += 1
 
-                print(f"@{username}: {text}\n→ {url}\n")
+                print(
+                    f"@{payload['username']}: {payload['text']}\n→ {payload.get('url', 'N/A')}\n"
+                )
                 total += 1
 
                 if total >= limit:
@@ -238,6 +375,62 @@ def write_tweets_to_db(limit=10):
     finally:
         db.close()
 
+
+def search_tweets_for_event(event_title: str, extra_keywords: Optional[Iterable[str]] = None, *, limit: int = 10, location_terms=None) -> List[dict]:
+    """Fetch tweets related to a specific event without persisting them.
+
+    Returns only real tweets from the X API. If the API key is missing, the
+    request fails, or no tweets match the query, the result may contain fewer
+    tweets than requested (including zero).
+    """
+
+    if not event_title:
+        return []
+
+    collected: List[dict] = []
+    remaining = max(0, limit)
+    
+    # Try to fetch real tweets if API key is available
+    try:
+        api_key = _require_api_key()
+        query = build_event_query(event_title, extra_keywords=extra_keywords, location_terms=location_terms)
+
+        seen_ids = set()
+        next_token = None
+
+        while remaining > 0:
+            page_limit = min(remaining, 10)
+            data = fetch_page(api_key, query, next_token=next_token, max_results=page_limit)
+            includes = data.get("includes", {})
+            users = index_users(includes)
+
+            for raw_tweet in data.get("data", []):
+                tweet_id = raw_tweet.get("id")
+                if tweet_id in seen_ids:
+                    continue
+
+                payload = _format_tweet_record(raw_tweet, users)
+                if payload is None:
+                    continue
+
+                seen_ids.add(tweet_id)
+                collected.append(_ensure_event_reference(payload, event_title))
+                remaining -= 1
+
+                if remaining <= 0:
+                    break
+
+            next_token = data.get("meta", {}).get("next_token")
+            if not next_token:
+                break
+                
+    except (ValueError, Exception):
+        # API key not set or request failed - return any tweets collected so far
+        pass
+
+    return collected
+
+
 def get_last_scrape_time():
     """Get the timestamp of the most recent tweet scrape."""
     db = SessionLocal()
@@ -249,7 +442,7 @@ def get_last_scrape_time():
         db.close()
 
 
-def get_tweets(limit=10, threshold_hours_for_refresh=2):
+def get_tweets(limit=10, threshold_hours_for_refresh=2, activity_keywords=None, location_terms=None, filter_keywords=None):
     """
     Get events (tweets) from the database.
 
@@ -258,6 +451,9 @@ def get_tweets(limit=10, threshold_hours_for_refresh=2):
     Args:
         limit: Number of tweets to return (default: 10)
         threshold_hours_for_refresh: Number of hours before data is considered stale (default: 2)
+        activity_keywords: Optional list of activity keywords to use for scraping
+        location_terms: Optional list of location terms to use for scraping
+        filter_keywords: Optional list of keywords to filter returned tweets (doesn't affect scraping)
 
     Returns:
         List of Tweet objects
@@ -287,12 +483,20 @@ def get_tweets(limit=10, threshold_hours_for_refresh=2):
 
     # Refresh data if needed
     if needs_refresh:
-        write_tweets_to_db(limit)
+        write_tweets_to_db(limit, activity_keywords=activity_keywords, location_terms=location_terms)
 
     # Fetch and return tweets from database
     db = SessionLocal()
     try:
-        tweets = db.query(Tweet).order_by(Tweet.scraped_at.desc()).limit(limit).all()
+        query = db.query(Tweet)
+        
+        # Filter by keywords if provided
+        if filter_keywords:
+            # Create a filter that matches if tweet text contains any of the keywords
+            keyword_filters = [Tweet.text.ilike(f'%{kw}%') for kw in filter_keywords]
+            query = query.filter(or_(*keyword_filters))
+        
+        tweets = query.order_by(Tweet.scraped_at.desc()).limit(limit).all()
         return tweets
     finally:
         db.close()
@@ -303,7 +507,7 @@ def main():
     parser = argparse.ArgumentParser(description="Fetch recent X tweets about activities in Edinburgh and store in database.")
     parser.add_argument("--limit", type=int, default=10, help="Number of tweets to fetch (default: 10).")
     args = parser.parse_args()
-    write_tweets_to_db(args.limit)
+    write_tweets_to_db(args.limit, activity_keywords=None, location_terms=None)
 
 if __name__ == "__main__":
     main()

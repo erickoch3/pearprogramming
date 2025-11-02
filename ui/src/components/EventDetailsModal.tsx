@@ -113,6 +113,7 @@ export function EventDetailsModal({ event, onClose }: EventDetailsModalProps) {
             )}
           </div>
         </div>
+
       </div>
     </div>
   );

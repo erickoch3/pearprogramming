@@ -25,7 +25,12 @@ _PROMPT = ChatPromptTemplate.from_messages(
             (
                 "You transform contextual information into structured event recommendations. "
                 "Always reply using the EventList schema with fields: name, description, emoji, "
-                "event_score (0-10), location (x,y coordinates), and optional link."
+                "event_score (0-10), location (x,y where x is latitude and y is longitude), and optional link.\n\n"
+                "IMPORTANT: When eventbrite_events are provided in the context, you MUST use the exact "
+                "latitude and longitude values from those events for the location field. Each event should "
+                "have unique coordinates based on the actual locations in the provided Eventbrite data. "
+                "Do not use the same coordinates for all events - extract and use the specific "
+                "latitude/longitude pairs from each Eventbrite event."
             ),
         ),
         (
@@ -91,10 +96,42 @@ class LLM:
         if isinstance(context, str):
             return context
         if isinstance(context, Mapping):
+            # Format Eventbrite events more prominently with coordinates
+            formatted_context = dict(context)
+            if "eventbrite_events" in formatted_context:
+                eventbrite_events = formatted_context["eventbrite_events"]
+                if isinstance(eventbrite_events, list) and eventbrite_events:
+                    # Create a readable summary highlighting coordinates
+                    formatted_events_summary = []
+                    formatted_events_summary.append(
+                        "IMPORTANT: Use the exact latitude/longitude coordinates below for event locations:\n"
+                    )
+                    for idx, event in enumerate(eventbrite_events, 1):
+                        if isinstance(event, dict):
+                            event_str = f"{idx}. {event.get('activity_name', 'Event')}"
+                            if "latitude" in event and "longitude" in event:
+                                event_str += (
+                                    f"\n   COORDINATES: latitude={event['latitude']}, "
+                                    f"longitude={event['longitude']} "
+                                    f"(use these values as location=[latitude, longitude])"
+                                )
+                            if "location_name" in event:
+                                event_str += f"\n   Venue: {event['location_name']}"
+                            if "url" in event:
+                                event_str += f"\n   URL: {event['url']}"
+                            formatted_events_summary.append(event_str)
+                    
+                    # Add summary at the beginning, then include full JSON
+                    summary_text = "\n".join(formatted_events_summary)
+                    try:
+                        json_str = json.dumps(formatted_context, indent=2)
+                        return f"{summary_text}\n\n--- Full Context JSON ---\n{json_str}"
+                    except TypeError:
+                        return f"{summary_text}\n\n--- Full Context ---\n{str(formatted_context)}"
             try:
-                return json.dumps(context, indent=2)
+                return json.dumps(formatted_context, indent=2)
             except TypeError:
-                return str(dict(context))
+                return str(formatted_context)
         if isinstance(context, Iterable) and not isinstance(context, (bytes, bytearray)):
             return "\n".join(str(item) for item in context)
         return str(context)
