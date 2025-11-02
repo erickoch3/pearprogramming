@@ -130,7 +130,7 @@ async def event_stream_generator(
         yield send_event("progress", {
             "status": "generating",
             "message": "Analyzing your preferences...",
-            "progress": 90
+            "progress": 60
         })
 
         # Run the generator in a thread pool with progress updates
@@ -149,35 +149,56 @@ async def event_stream_generator(
             extra={"event": {"number_events": request.number_events}},
         )
 
-        # Send progress updates while waiting for LLM
+        # Send progress updates while waiting for LLM (60-95%)
         progress_steps = [
-            (92, "Reviewing available events..."),
-            (94, "Matching preferences to events..."),
-            (96, "Ranking recommendations..."),
-            (98, "Finalizing suggestions..."),
+            (65, "Understanding context..."),
+            (70, "Reviewing available events..."),
+            (75, "Filtering relevant activities..."),
+            (80, "Matching preferences to events..."),
+            (85, "Scoring event matches..."),
+            (90, "Ranking recommendations..."),
+            (95, "Finalizing suggestions..."),
         ]
 
         step_index = 0
-        while not future.done():
-            await asyncio.sleep(0.5)  # Check every 500ms
+        last_update_time = time.perf_counter()
+        update_interval = 2.0  # Send update every 2 seconds
 
-            # Send next progress update
-            if step_index < len(progress_steps):
+        while not future.done():
+            await asyncio.sleep(0.2)  # Check frequently
+
+            current_time = time.perf_counter()
+            time_since_last_update = current_time - last_update_time
+
+            # Send next progress update if enough time has passed
+            if step_index < len(progress_steps) and time_since_last_update >= update_interval:
                 progress_value, progress_msg = progress_steps[step_index]
                 yield send_event("progress", {
                     "status": "generating",
                     "message": progress_msg,
                     "progress": progress_value
                 })
-                logger.debug(
+                logger.info(
                     "stream: LLM progress step",
                     extra={"event": {"progress": progress_value, "message": progress_msg}},
                 )
                 step_index += 1
+                last_update_time = current_time
 
-            # Wait a bit between updates
-            if not future.done():
-                await asyncio.sleep(1.5)  # 2 seconds total between updates
+        # Send any remaining progress steps that weren't sent
+        while step_index < len(progress_steps):
+            progress_value, progress_msg = progress_steps[step_index]
+            yield send_event("progress", {
+                "status": "generating",
+                "message": progress_msg,
+                "progress": progress_value
+            })
+            logger.info(
+                "stream: LLM progress step (fast completion)",
+                extra={"event": {"progress": progress_value, "message": progress_msg}},
+            )
+            step_index += 1
+            await asyncio.sleep(0.3)  # Small delay so user can see the progress
 
         # Get the result
         events = future.result()
@@ -192,6 +213,13 @@ async def event_stream_generator(
                 }
             },
         )
+
+        # Send serialization progress update
+        yield send_event("progress", {
+            "status": "generating",
+            "message": "Preparing results...",
+            "progress": 96
+        })
 
         # Send final result - convert Location objects to [x, y] tuples for JSON serialization
         serialized_events = []
@@ -218,6 +246,7 @@ async def event_stream_generator(
             except Exception as e:
                 logger.error("Failed to serialize event", extra={"event": {"error": str(e)}})
                 raise
+
         serialization_duration = time.perf_counter() - serialization_start
         total_duration = time.perf_counter() - start_time
         logger.info(
@@ -230,6 +259,13 @@ async def event_stream_generator(
                 }
             },
         )
+
+        # Send packaging progress
+        yield send_event("progress", {
+            "status": "generating",
+            "message": "Packaging recommendations...",
+            "progress": 98
+        })
 
         yield send_event("complete", {
             "status": "complete",
