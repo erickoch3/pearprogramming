@@ -1,14 +1,21 @@
 import type { Event } from "@/types/events";
+import type { ProgressUpdate } from "@/hooks/useStreamingEventRecommendations";
+import { ProgressTracker } from "./ProgressTracker";
 
 export interface EventListProps {
   events: Event[];
   loading: boolean;
   error?: string | null;
+  progress?: ProgressUpdate | null;
   onSelectEvent?: (event: Event) => void;
 }
 
-export function EventList({ events, loading, error, onSelectEvent }: EventListProps) {
+export function EventList({ events, loading, error, progress, onSelectEvent }: EventListProps) {
   if (loading) {
+    // Show progress tracker if we have progress data, otherwise show simple loading
+    if (progress) {
+      return <ProgressTracker progress={progress} />;
+    }
     return (
       <section className="h-full rounded-2xl border border-neutral-200/80 bg-white/80 backdrop-blur-sm p-6 shadow-xl shadow-neutral-200/50 dark:border-neutral-800/50 dark:bg-neutral-900/80 dark:shadow-black/20 flex items-center justify-center">
         <p className="text-sm text-neutral-600 dark:text-neutral-300 animate-pulse">

@@ -64,6 +64,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const city = searchParams.get("city")?.trim() || DEFAULT_CITY;
   const countryCode = searchParams.get("country")?.trim() || DEFAULT_COUNTRY_CODE;
+  const userPreferences = searchParams.get("preferences")?.trim() || "";
 
   if (!weatherApiKey || !openAiApiKey) {
     const missingKeys = [
@@ -96,6 +97,7 @@ export async function GET(request: NextRequest) {
     const inspiration = await generateInspiration(
       weatherSummary,
       todayIso,
+      userPreferences,
       openAiApiKey,
       request.signal,
     );
@@ -287,16 +289,26 @@ function capitalize(value: string): string {
 async function generateInspiration(
   weatherSummary: string,
   isoDate: string,
+  userPreferences: string,
   openAiKey: string,
   signal?: AbortSignal,
 ): Promise<{ sentence: string; model: string | null; status: number; notes?: string }> {
   const models = buildModelQueue();
-  const prompt = [
+  const promptParts = [
     `Today is ${isoDate}.`,
     `Weather summary: ${weatherSummary}.`,
+  ];
+
+  if (userPreferences) {
+    promptParts.push(`User interests: ${userPreferences}.`);
+  }
+
+  promptParts.push(
     "Write a short inspiring sentence (3-7 words) about enjoying today.",
     "Return only the sentence without additional commentary or quotation marks.",
-  ].join(" ");
+  );
+
+  const prompt = promptParts.join(" ");
 
   let lastError: Error | null = null;
 
@@ -359,7 +371,7 @@ async function callOpenAi(
           content: prompt,
         },
       ],
-      temperature: 0.8,
+      temperature: 1.2,
       max_tokens: 32,
     }),
     cache: "no-store",

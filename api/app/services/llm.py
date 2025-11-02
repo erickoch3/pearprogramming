@@ -26,6 +26,8 @@ _PROMPT = ChatPromptTemplate.from_messages(
                 "You transform contextual information into structured event recommendations that reflect the caller's preferences. "
                 "Always reply using the EventList schema with fields: name, description, emoji, "
                 "event_score (0-10), location (x,y coordinates), and optional link. "
+                "IMPORTANT: The emoji field must contain exactly ONE single emoji character that best represents the event (e.g., 🎭 for theater, 🎵 for music, 🍕 for food). "
+                "Do NOT use multiple emojis, text, or emoji combinations. "
                 "The context payload includes user preference signals under keys such as 'preferences_raw', "
                 "'preferences', 'preferences_normalized', and 'preference_keywords'. Use these to select and score events: "
                 "scores of 9-10 indicate strong alignment, 6-8 partial alignment, and 0-5 weak or fallback options. "
@@ -35,7 +37,8 @@ _PROMPT = ChatPromptTemplate.from_messages(
         (
             "human",
             "Context:\n{context}\n\nPrioritize the user's stated preferences when choosing events. "
-            "Return up to {max_events} high-quality, preference-aligned events.",
+            "Return up to {max_events} high-quality, preference-aligned events. "
+            "Remember: use exactly one emoji per event.",
         ),
     ]
 )
