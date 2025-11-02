@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Optional
 
 import requests
@@ -21,10 +21,10 @@ except Exception as exc:  # pragma: no cover
 
 try:  # pragma: no cover - optional dependency may fail at import time
     from ..utils.scrapers.scrape_tweets import (  # type: ignore[attr-defined]
-        get_tweets as _tweets_get_tweets,
+        get_events as _tweets_get_events,
     )
 except Exception as exc:  # pragma: no cover
-    _tweets_get_tweets = None  # type: ignore[assignment]
+    _tweets_get_events = None  # type: ignore[assignment]
     logger.debug("Tweet scraper import failed: %s", exc)
 
 from .scrapers import (
@@ -47,7 +47,6 @@ def _estimate_season(target_date: date) -> str:
     if month in (6, 7, 8):
         return "summer"
     return "autumn"
-
 
 class ContextAggregator:
     """Collects context data used to tailor event recommendations."""
@@ -193,6 +192,19 @@ class ContextAggregator:
                 eventbrite_error = str(exc)
         else:
             logger.debug("Eventbrite scraper not available; skipping Eventbrite events")
+        
+        # Optionally include events from Twitter API when the optional scraper
+        # dependency is available and credentials are configured.
+        twitter_events: list[Any] = []
+        twitter_error: Optional[str] = None
+        if _tweets_get_events is not None:
+            try:
+                twitter_events = _tweets_get_events()
+            except Exception as exc:  # pragma: no cover - network/env dependent
+                logger.warning("Twitter fetch failed: %s", exc)
+                twitter_error = str(exc)
+        else:
+            logger.debug("Twitter scraper not available; skipping Twitter events")
 
         return {
             "date": resolved_date.isoformat(),
@@ -203,4 +215,6 @@ class ContextAggregator:
             "festival_events": festival_events,
             "eventbrite_events": eventbrite_events,
             "eventbrite_error": eventbrite_error,
+            "twitter_events": twitter_events,
+            "twitter_error": twitter_error
         }
