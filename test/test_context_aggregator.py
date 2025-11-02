@@ -10,6 +10,7 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+from api.app.services import context_aggregator
 from api.app.services.context_aggregator import (
     ContextAggregator,
     WeatherFetchError,
@@ -29,15 +30,19 @@ class _DummyResponse:
         return None
 
 
+def _clear_caches():
+    context_aggregator._WEATHER_CACHE = {}
+    context_aggregator._FESTIVAL_CACHE = {}
+
+
 def test_get_todays_weather_forecast(monkeypatch):
     """Ensure weather forecast aggregates expected fields."""
 
     monkeypatch.setenv("OPENWEATHERMAP_API_KEY", "fake-key")
-    monkeypatch.setenv("EDINBURGH_FESTIVALS_DEFAULT_FESTIVAL", "")
+    _clear_caches()
 
     def fake_get(url, params, **kwargs):
-        if "geo" in url:
-            return _DummyResponse([{"lat": 55.9533, "lon": -3.1883}])
+        assert params["q"] == "Edinburgh,GB"
         return _DummyResponse(
             {
                 "main": {"temp": 12.3, "feels_like": 11.0, "humidity": 87},
@@ -49,7 +54,7 @@ def test_get_todays_weather_forecast(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "api.app.services.context_aggregator.requests.get", fake_get
+        "api.app.services.context_aggregator._SESSION.get", fake_get
     )
 
     aggregator = ContextAggregator()
@@ -70,32 +75,36 @@ def test_get_todays_weather_forecast(monkeypatch):
 
 def test_gather_context_includes_defaults(monkeypatch):
     monkeypatch.setenv("OPENWEATHERMAP_API_KEY", "fake-key")
+    _clear_caches()
 
     def fake_get(url, params, **kwargs):
-        return (
-            _DummyResponse([{"lat": 55.9533, "lon": -3.1883}])
-            if "geo" in url
-            else _DummyResponse(
-                {
-                    "main": {"temp": 10.0, "feels_like": 9.0, "humidity": 80},
-                    "wind": {"speed": 5.0},
-                    "clouds": {"all": 60},
-                }
-            )
+        return _DummyResponse(
+            {
+                "main": {"temp": 10.0, "feels_like": 9.0, "humidity": 80},
+                "wind": {"speed": 5.0},
+                "clouds": {"all": 60},
+            }
         )
 
     monkeypatch.setattr(
-        "api.app.services.context_aggregator.requests.get", fake_get
+        "api.app.services.context_aggregator._SESSION.get", fake_get
     )
     monkeypatch.setattr(
         "api.app.services.context_aggregator.fetch_festival_events",
         lambda target_date, **kwargs: {"date": target_date.isoformat(), "events": []},
+    )
+    monkeypatch.setattr(
+        "api.app.services.context_aggregator._FESTIVAL_CACHE", {}
     )
 
     aggregator = ContextAggregator()
     context = aggregator.gather_context("Music events")
 
     assert context["preferences"] == "music events"
+    assert context["preferences_normalized"] == "music events"
+    assert context["preferences_raw"] == "Music events"
+    assert context["preference_keywords"] == ["music", "events"]
+    assert context["has_preferences"] is True
     assert context["city"] == "Edinburgh"
     assert isinstance(context["weather"], Mapping)
     assert context["weather_error"] is None
