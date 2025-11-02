@@ -8,7 +8,8 @@ import type { MapMode } from "@/hooks/useUserSettings";
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { mapMode, setMapMode } = useUserSettings();
+  const { mapMode, setMapMode, activityPreferences, setActivityPreferences } =
+    useUserSettings();
 
   const handleMapModeChange = (mode: MapMode) => {
     setMapMode(mode);
@@ -201,6 +202,33 @@ export default function SettingsPage() {
                 </button>
               </div>
             </div>
+          </section>
+
+          <section className="rounded-2xl border border-neutral-200/80 bg-white/80 backdrop-blur-sm p-6 shadow-xl shadow-neutral-200/50 dark:border-neutral-800/50 dark:bg-neutral-900/80 dark:shadow-black/20">
+            <h2 className="text-xl font-bold mb-2 text-neutral-900 dark:text-neutral-50">
+              Event Preferences
+            </h2>
+            <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-6">
+              Describe the activities you want factored into event recommendations.
+            </p>
+
+            <label
+              className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-3"
+              htmlFor="activity-preferences"
+            >
+              Activity Preferences
+            </label>
+            <textarea
+              id="activity-preferences"
+              value={activityPreferences}
+              onChange={(event) => setActivityPreferences(event.target.value)}
+              placeholder="e.g. edinburgh outdoor community events"
+              className="w-full min-h-[120px] resize-y rounded-xl border-2 border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-900 shadow-sm transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-50 dark:focus:border-blue-400 dark:focus:ring-blue-900/60"
+            />
+            <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+              We send this text directly with the recommendation request so you can
+              fine-tune the tone, themes, or constraints.
+            </p>
           </section>
 
           <div className="flex justify-end">

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import List, Optional
 
 from ..schemas.events import Event
@@ -35,22 +36,24 @@ class ActivitySuggestionGenerator:
     def __init__(self, context_aggregator: ContextAggregator) -> None:
         self._context_aggregator = context_aggregator
         self._mock_mode_enabled = os.getenv("MOCK") == "1"
+        self._llm_instance: Optional[LLM] = None
 
     def generate_suggestions(
         self, number_events: int, response_preferences: Optional[str]
     ) -> List[Event]:
         """Produce event recommendations matching the caller's preferences."""
         if self._mock_mode_enabled:
-            events = get_mock_events(number_events)
-            if response_preferences:
-                normalized = response_preferences.strip().lower()
-                filtered = [
-                    event
-                    for event in events
-                    if normalized in event.name.lower()
-                    or normalized in event.description.lower()
-                ]
-                events = filtered or events
+            events = [event.model_copy(deep=True) for event in get_mock_events(number_events)]
+            tokens = _tokenize_preferences(response_preferences)
+            if tokens:
+                for event in events:
+                    event_text = f"{event.name} {event.description}".lower()
+                    match_strength = _match_ratio(event_text, tokens)
+                    event.event_score = _score_with_preferences(
+                        baseline=event.event_score,
+                        match_ratio=match_strength,
+                    )
+                events.sort(key=lambda item: item.event_score, reverse=True)
             return events
 
         if LLM is None:  # pragma: no cover - exercised when optional deps missing
@@ -59,11 +62,11 @@ class ActivitySuggestionGenerator:
             ) from _llm_import_error
 
         assert LLM is not None  # mypy/time-of-check guard
-        # context = TEST_CONTEXT  
+        llm = self._get_llm()
+        # context = TEST_CONTEXT
         context = self._context_aggregator.gather_context(response_preferences)
-        # preferences = context["preferences"]
 
-        ranked_events = LLM().generate_event_suggestions(
+        ranked_events = llm.generate_event_suggestions(
             context=context, max_events=number_events
         )
         return ranked_events
@@ -75,7 +78,8 @@ class ActivitySuggestionGenerator:
                 "LLM backend is unavailable. Install the required dependencies or run the API with MOCK=1."
             ) from _llm_import_error
 
-        sample_events = LLM()._get_fallback_events()
+        llm = self._get_llm()
+        sample_events = llm._get_fallback_events()
 
         if not preferences:
             return sample_events
@@ -85,3 +89,35 @@ class ActivitySuggestionGenerator:
             event for event in sample_events if preferences in event.description.lower()
         ]
         return filtered or sample_events
+
+    def _get_llm(self) -> LLM:
+        assert LLM is not None  # appease type checkers
+        if self._llm_instance is None:
+            self._llm_instance = LLM()
+        return self._llm_instance
+
+
+def _tokenize_preferences(preferences: Optional[str]) -> list[str]:
+    if not preferences:
+        return []
+
+    tokens = re.split(r"[^\w]+", preferences.lower())
+    return [token for token in tokens if token and len(token) > 2]
+
+
+def _match_ratio(text: str, tokens: list[str]) -> float:
+    if not tokens:
+        return 0.0
+
+    matches = sum(1 for token in tokens if token in text)
+    return matches / len(tokens)
+
+
+def _score_with_preferences(*, baseline: float, match_ratio: float) -> float:
+    """Blend the baseline event score with the preference alignment signal."""
+    if match_ratio <= 0:
+        adjusted = baseline * 0.3 + 2.0
+    else:
+        preference_anchor = 3.0 + 7.0 * match_ratio
+        adjusted = baseline * 0.3 + preference_anchor * 0.7
+    return round(max(0.0, min(10.0, adjusted)), 1)

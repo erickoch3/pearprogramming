@@ -1,4 +1,5 @@
 import type {
+  Coordinates,
   Event,
   GetEventRecommendationsRequest,
   GetEventRecommendationsResponse,
@@ -11,6 +12,15 @@ const API_BASE_URL =
 const EVENT_RECOMMENDATIONS_PATH = "/events/recommendations";
 const MOCK_ENABLED =
   process.env.NEXT_PUBLIC_MOCK === "1" || process.env.MOCK === "1";
+const RESPONSE_CACHE_TTL_MS = 60_000;
+
+type ResponseCacheEntry = {
+  timestamp: number;
+  payload: GetEventRecommendationsResponse;
+};
+
+const inFlightRequests = new Map<string, Promise<GetEventRecommendationsResponse>>();
+const responseCache = new Map<string, ResponseCacheEntry>();
 
 export async function fetchEventRecommendations(
   request: GetEventRecommendationsRequest,
@@ -22,7 +32,32 @@ export async function fetchEventRecommendations(
     };
   }
 
-  return requestEventRecommendations(request, options);
+  const cacheKey = buildCacheKey(request, options);
+  const now = Date.now();
+
+  const cached = responseCache.get(cacheKey);
+  if (cached && now - cached.timestamp < RESPONSE_CACHE_TTL_MS) {
+    return cloneResponse(cached.payload);
+  }
+
+  let pending = inFlightRequests.get(cacheKey);
+  if (!pending) {
+    pending = requestEventRecommendations(request, options)
+      .then((response) => {
+        responseCache.set(cacheKey, {
+          timestamp: Date.now(),
+          payload: response,
+        });
+        return response;
+      })
+      .finally(() => {
+        inFlightRequests.delete(cacheKey);
+      });
+    inFlightRequests.set(cacheKey, pending);
+  }
+
+  const response = await pending;
+  return cloneResponse(response);
 }
 
 async function requestEventRecommendations(
@@ -75,6 +110,36 @@ function normalizeEvent(event: RawEvent): Event {
 
 function getMockEvents(limit: number): Event[] {
   return MOCK_EVENTS.slice(0, Math.max(0, limit));
+}
+
+function buildCacheKey(
+  request: GetEventRecommendationsRequest,
+  options?: RequestInit,
+): string {
+  const headers = options?.headers;
+  // We only care about custom headers that might affect auth; stringify stable subset.
+  const headerKey =
+    headers instanceof Headers
+      ? JSON.stringify(Object.fromEntries(headers.entries()))
+      : headers && typeof headers === "object"
+        ? JSON.stringify(Object.fromEntries(Object.entries(headers)))
+        : "";
+  return JSON.stringify({
+    request,
+    headerKey,
+  });
+}
+
+function cloneResponse(
+  response: GetEventRecommendationsResponse,
+): GetEventRecommendationsResponse {
+  return {
+    events: response.events.map((event) => ({
+      ...event,
+      location: [...event.location] as Coordinates,
+      link: event.link ?? undefined,
+    })),
+  };
 }
 
 const MOCK_EVENTS: Event[] = [

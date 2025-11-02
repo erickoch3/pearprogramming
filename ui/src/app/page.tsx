@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { AppHeader } from "@/components/AppHeader";
 import { EventDetailsModal } from "@/components/EventDetailsModal";
@@ -8,15 +8,22 @@ import { EventListSection } from "@/components/EventListSection";
 import { MapSection } from "@/components/MapSection";
 import { SettingsButton } from "@/components/SettingsButton";
 import { useEventRecommendations } from "@/hooks/useEventRecommendations";
+import { useUserSettings } from "@/hooks/useUserSettings";
 import type { Event } from "@/types/events";
 
-const DEFAULT_EVENT_REQUEST = {
-  number_events: 8,
-  response_preferences: "edinburgh outdoor community",
-} as const;
+const DEFAULT_NUMBER_EVENTS = 8;
 
 export default function HomePage() {
-  const { events, loading, error } = useEventRecommendations(DEFAULT_EVENT_REQUEST);
+  const { activityPreferences } = useUserSettings();
+  const eventRequest = useMemo(
+    () => ({
+      number_events: DEFAULT_NUMBER_EVENTS,
+      response_preferences: activityPreferences,
+    }),
+    [activityPreferences],
+  );
+
+  const { events, loading, error } = useEventRecommendations(eventRequest);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
 
   const handleSelectEvent = (event: Event) => {
