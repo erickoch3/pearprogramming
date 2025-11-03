@@ -4,6 +4,8 @@
 
 **Pear Programming** is an intelligent activity recommendation platform that leverages AI and real-time data aggregation to deliver personalized event suggestions. Built for HackTheBurgh, our system transforms how people discover local experiences by understanding context, preferences, and real-time conditions.
 
+![Demo](./assets/demo.gif)
+
 ## Architecture & Tech Stack
 
 ### Backend (Python FastAPI)
